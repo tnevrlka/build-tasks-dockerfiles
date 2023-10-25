@@ -1,0 +1,14 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "regexManagers": [
+    {
+      "fileMatch": ["^syft.Dockerfile$"],
+      "matchStrings": [
+        "ARG syft_version=[\"']?(?<currentValue>.+?)[\"']?\\s+"
+      ],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "anchore/syft",
+      "extractVersionTemplate": "^v(?<version>.*)$"
+    }
+  ]
+}
