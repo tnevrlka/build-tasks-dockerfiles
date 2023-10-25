@@ -5,13 +5,13 @@ on:
     branches:
       - main
     paths:
-      - syft.Dockerfile
+      - syft/Dockerfile
     
   pull_request:
     branches:
       - main
     paths:
-      - syft.Dockerfile
+      - syft/Dockerfile
 
 
 env:
@@ -28,7 +28,7 @@ jobs:
 
     - name: Extract version from Dockerfile
       id: extract-version
-      run: echo "version=$(grep -oP '(?<=ARG syft_version=")[^"]*' syft.Dockerfile)" >> $GITHUB_OUTPUT
+      run: echo "version=$(grep -oP '(?<=ARG syft_version=")[^"]*' syft/Dockerfile)" >> $GITHUB_OUTPUT
 
     - name: Build Image
       id: build-image
@@ -38,7 +38,7 @@ jobs:
         tags: v${{ steps.extract-version.outputs.version }}
         context: .
         containerfiles: |
-            ./syft.Dockerfile
+            ./syft/Dockerfile
 
     - name: Push to Quay
       if: github.event_name == 'push'  # don't push image from PR
