@@ -28,7 +28,7 @@ jobs:
 
     - name: Extract version from Dockerfile
       id: extract-version
-      run: echo "::set-output name=version::$(grep -oP '(?<=ARG syft_version=")[^"]*' syft.Dockerfile)"
+      run: echo "version=$(grep -oP '(?<=ARG syft_version=")[^"]*' syft.Dockerfile)" >> $GITHUB_OUTPUT
 
     - name: Build Image
       id: build-image
