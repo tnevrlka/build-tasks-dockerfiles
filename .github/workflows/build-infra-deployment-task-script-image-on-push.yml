@@ -1,0 +1,46 @@
+name: Build Script Image on Push
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - update-infra-deployments-task-scripts-image/Dockerfile
+
+env:
+  REGISTRY: quay.io/redhat-appstudio
+  IMAGE_NAME: update-infra-deployments-task-script-image
+  
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Log in to Red Hat Registry
+      uses: redhat-actions/podman-login@v1
+      with:
+        registry: registry.redhat.io
+        username: ${{ secrets.REGISTRY_REDHAT_IO_USER }}
+        password: ${{ secrets.REGISTRY_REDHAT_IO_PASSWORD }}
+
+    - name: Build Image
+      id: build-image
+      uses: redhat-actions/buildah-build@v2
+      with:
+        image: ${{ env.IMAGE_NAME }}
+        tags: ${{ github.sha }}
+        context: .
+        containerfiles: |
+            ./update-infra-deployments-task-scripts-image/Dockerfile
+
+    - name: Push to Quay
+      uses: redhat-actions/push-to-registry@v2
+      with:
+        image: ${{ steps.build-image.outputs.image }}
+        tags: ${{ steps.build-image.outputs.tags }}
+        registry: ${{ env.REGISTRY }}
+        username: ${{ secrets.QUAY_USERNAME }}
+        password: ${{ secrets.QUAY_PASSWORD }}
