@@ -29,6 +29,10 @@ jobs:
         sudo apt-get install -y python3-pip
         python3 -m pip install tox
         tox -c ./source-container-build/app/tox.ini
+    - name: Lint Dockerfile
+      uses: hadolint/hadolint-action@v3.1.0
+      with:
+        dockerfile: ./source-container-build/Dockerfile
 
   build-image:
     runs-on: ubuntu-latest
