@@ -9,6 +9,13 @@
       "datasourceTemplate": "github-releases",
       "depNameTemplate": "anchore/syft",
       "extractVersionTemplate": "^v(?<version>.*)$"
+    },
+    {
+      "fileMatch": ["^source-container-build/Dockerfile$"],
+      "matchStrings": ["ARG BSI_VERSION=(?<currentValue>.+?)\\n"],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "containers/BuildSourceImage",
+      "extractVersionTemplate": "^v(?<version>.*)(: .+)?$"
     }
   ]
 }
