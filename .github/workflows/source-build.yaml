@@ -46,7 +46,9 @@ jobs:
       uses: redhat-actions/buildah-build@v2
       with:
         image: ${{ env.IMAGE_NAME }}
-        tags: latest
+        tags: |
+          latest
+          ${{ github.sha }}
         context: ./source-container-build
         containerfiles: |
           ./source-container-build/Dockerfile
