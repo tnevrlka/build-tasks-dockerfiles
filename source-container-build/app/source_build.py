@@ -25,6 +25,8 @@ logging.basicConfig(level=logging.DEBUG, format="%(asctime)s:%(name)s:%(levelnam
 logger = logging.getLogger("source-build")
 
 BSI: Final = "/opt/BuildSourceImage/bsi"
+BSI_DRV_RPM_DIR: Final = "sourcedriver_rpm_dir"
+BSI_DRV_EXTRA_SRC_DIR: Final = "sourcedriver_extra_src_dir"
 
 ARCHIVE_MIMETYPES = (
     "application/gzip",
@@ -360,11 +362,11 @@ def build_and_push(
     bsi_src_drivers = []
     bsi_cmd = [bsi_script, "-b", str(bsi_build_base_dir), "-o", str(image_output_dir)]
     if sib_dirs.rpm_dir:
-        bsi_src_drivers.append("sourcedriver_rpm_dir")
+        bsi_src_drivers.append(BSI_DRV_RPM_DIR)
         bsi_cmd.append("-s")
         bsi_cmd.append(str(sib_dirs.rpm_dir))
     if sib_dirs.extra_src_dirs:
-        bsi_src_drivers.append("sourcedriver_extra_src_dir")
+        bsi_src_drivers.append(BSI_DRV_EXTRA_SRC_DIR)
         for dir_path in sib_dirs.extra_src_dirs:
             bsi_cmd.append("-e")
             bsi_cmd.append(str(dir_path))
@@ -389,8 +391,11 @@ def build_and_push(
     ]
     log.debug("push source image %r", push_cmd)
     run(push_cmd, check=True)
-    with open(digest_file, "r") as f:
-        build_result["image_digest"] = f.read().strip()
+    try:
+        with open(digest_file, "r") as f:
+            build_result["image_digest"] = f.read().strip()
+    finally:
+        os.unlink(digest_file)
 
 
 def build(args) -> BuildResult:
