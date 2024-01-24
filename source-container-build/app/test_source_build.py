@@ -280,7 +280,7 @@ class TestMakeSourceArchive(unittest.TestCase):
 class TestBuildAndPush(unittest.TestCase):
     """Test build_and_push"""
 
-    DEST_IMAGE: Final = "registry/org/app:tag"
+    DEST_IMAGE: Final = "registry/org/app:sha256-1234567.src"
 
     def setUp(self) -> None:
         self.work_dir = mkdtemp()
@@ -320,7 +320,7 @@ class TestBuildAndPush(unittest.TestCase):
         self.sib_dirs.extra_src_dirs.append(extra_src_dir0)
 
         source_build.build_and_push(
-            self.work_dir, self.sib_dirs, FAKE_BSI, self.DEST_IMAGE, build_result
+            self.work_dir, self.sib_dirs, FAKE_BSI, [self.DEST_IMAGE], build_result
         )
 
         bsi_cmd = run.mock_calls[0].args[0]
@@ -341,7 +341,7 @@ class TestBuildAndPush(unittest.TestCase):
         # extra_src_dirs is empty, which indicates that no extra source will be composed.
 
         source_build.build_and_push(
-            self.work_dir, self.sib_dirs, FAKE_BSI, self.DEST_IMAGE, build_result
+            self.work_dir, self.sib_dirs, FAKE_BSI, [self.DEST_IMAGE], build_result
         )
 
         bsi_cmd = run.mock_calls[0].args[0]
@@ -366,7 +366,7 @@ class TestBuildAndPush(unittest.TestCase):
         self.sib_dirs.extra_src_dirs.append(extra_src_dir0)
 
         source_build.build_and_push(
-            self.work_dir, self.sib_dirs, FAKE_BSI, self.DEST_IMAGE, build_result
+            self.work_dir, self.sib_dirs, FAKE_BSI, [self.DEST_IMAGE], build_result
         )
 
         bsi_cmd = run.mock_calls[0].args[0]
@@ -401,7 +401,7 @@ class TestBuildAndPush(unittest.TestCase):
         self.sib_dirs.extra_src_dirs.append(mkdtemp())
 
         source_build.build_and_push(
-            self.work_dir, self.sib_dirs, FAKE_BSI, self.DEST_IMAGE, build_result
+            self.work_dir, self.sib_dirs, FAKE_BSI, [self.DEST_IMAGE], build_result
         )
 
         self.assertEqual(digest, build_result["image_digest"])
@@ -422,7 +422,7 @@ class TestBuildAndPush(unittest.TestCase):
     @patch("source_build.run")
     @patch.dict("os.environ", {"BSI_DEBUG": "1"})
     def test_enable_bsi_debug_mode(self, run):
-        source_build.build_and_push(self.work_dir, self.sib_dirs, FAKE_BSI, self.DEST_IMAGE, {})
+        source_build.build_and_push(self.work_dir, self.sib_dirs, FAKE_BSI, [self.DEST_IMAGE], {})
 
         bsi_cmd = run.mock_calls[0].args[0]
         args = create_bsi_cli_parser().parse_args(bsi_cmd[1:])
@@ -776,6 +776,7 @@ class TestGatherPrefetchedSources(unittest.TestCase):
 class TestBuildProcess(unittest.TestCase):
     """Test build process primarily but not the details of every portion"""
 
+    BINARY_IMAGE_MANIFEST_DIGEST: Final = "sha256:87e8e87"
     FAKE_IMAGE_DIGEST: Final = "40b2a5f7e477"
     PIP_PKG: Final = "requests-1.2.3.tar.gz"
     app_source_dirs = AppSourceDirs("", "", "")
@@ -885,6 +886,10 @@ class TestBuildProcess(unittest.TestCase):
     ):
         """Test include various sources and app source will always be included"""
 
+        # For checking the backward-compatible tag is pushed
+        # Once the backward-compatible tag is removed, this can be removed as well.
+        pushed_images: list[str] = []
+
         def run_side_effect(cmd, **kwargs):
             run_cmd = cmd[:2]
             if run_cmd == ["git", "rev-parse"]:
@@ -898,12 +903,17 @@ class TestBuildProcess(unittest.TestCase):
                 return completed_proc
 
             if run_cmd == ["skopeo", "inspect"]:
-                parent_source_image = cmd[-1]
-                self.assertNotIn(
-                    "@sha256:", parent_source_image, "digest is not removed from parent image"
-                )
-                # Indicate the source image of parent image exists
-                return Mock(returncode=0)
+                if cmd[2] == "--raw":
+                    parent_source_image = cmd[-1]
+                    self.assertNotIn(
+                        "@sha256:", parent_source_image, "digest is not removed from parent image"
+                    )
+                    # Indicate the source image of parent image exists
+                    return Mock(returncode=0)
+                if cmd[2] == "--format":
+                    mock = Mock()
+                    mock.stdout = self.BINARY_IMAGE_MANIFEST_DIGEST
+                    return mock
 
             if run_cmd == ["skopeo", "copy"]:
                 if cmd[2] == "--digestfile":
@@ -911,6 +921,8 @@ class TestBuildProcess(unittest.TestCase):
                     digest_file = cmd[3]
                     with open(digest_file, "w") as f:
                         f.write(self.FAKE_IMAGE_DIGEST)
+
+                    pushed_images.append(cmd[-1].removeprefix("docker://"))
                 else:
                     # copy for download parent image sources
                     # to simulate the download, write manifest.json and mock the tarfile.open
@@ -1014,7 +1026,6 @@ class TestBuildProcess(unittest.TestCase):
         self.assertEqual("success", build_result["status"])
         self.assertEqual(include_parent_image_sources, build_result["base_image_source_included"])
         self.assertEqual(include_prefetched_sources, build_result["dependencies_included"])
-        self.assertEqual(f"{OUTPUT_BINARY_IMAGE}.src", build_result["image_url"])
         self.assertEqual(self.FAKE_IMAGE_DIGEST, build_result["image_digest"])
         self.assertNotIn(
             "message",
@@ -1022,6 +1033,14 @@ class TestBuildProcess(unittest.TestCase):
             "this test is for successful run, result should not include message field.",
         )
 
+        image_repo = OUTPUT_BINARY_IMAGE.split(":")[0]
+        image_tag = f"{self.BINARY_IMAGE_MANIFEST_DIGEST.replace(':', '-')}.src"
+        expected_source_image = f"{image_repo}:{image_tag}"
+        self.assertEqual(expected_source_image, build_result["image_url"])
+
+        self.assertListEqual([f"{OUTPUT_BINARY_IMAGE}.src", expected_source_image], pushed_images)
+
+    # @patch("source_build.run")
     def test_just_include_app_source(self):
         self._test_include_sources()
 

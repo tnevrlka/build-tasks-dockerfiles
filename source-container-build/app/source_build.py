@@ -352,7 +352,7 @@ def build_and_push(
     work_dir: str,
     sib_dirs: SourceImageBuildDirectories,
     bsi_script: str,
-    dest_image: str,
+    dest_images: list[str],
     build_result: BuildResult,
 ) -> None:
     log = logging.getLogger("source-build.build-and-push")
@@ -381,18 +381,40 @@ def build_and_push(
     # push to registry
     fd, digest_file = tempfile.mkstemp()
     os.close(fd)
-    push_cmd = [
-        "skopeo",
-        "copy",
-        "--digestfile",
-        digest_file,
-        f"oci://{image_output_dir}:latest-source",
-        f"docker://{dest_image}",
-    ]
-    log.debug("push source image %r", push_cmd)
-    run(push_cmd, check=True)
+    for dest_image in dest_images:
+        push_cmd = [
+            "skopeo",
+            "copy",
+            "--digestfile",
+            digest_file,
+            f"oci://{image_output_dir}:latest-source",
+            f"docker://{dest_image}",
+        ]
+        log.debug("push source image %r", push_cmd)
+        run(push_cmd, check=True)
     with open(digest_file, "r") as f:
         build_result["image_digest"] = f.read().strip()
+
+
+def fetch_image_manifest_digest(image: str) -> str:
+    cmd = ["skopeo", "inspect", "--format", "{{.Digest}}", "--no-tags", f"docker://{image}"]
+    return run(cmd, check=True, text=True, capture_output=True).stdout.strip()
+
+
+def generate_source_images(image: str) -> list[str]:
+    """Generate source container images from the built binary image
+
+    :param image: str, represent the built image.
+    :return: list of generated source container images.
+    """
+    # For backward-compatibility. It will be removed in near future.
+    deprecated_image = f"{image}.src"
+
+    # in format: sha256:1234567
+    digest = fetch_image_manifest_digest(image)
+    source_image = f"{image.rsplit(':', 1)[0]}:{digest.replace(':', '-')}.src"
+
+    return [deprecated_image, source_image]
 
 
 def build(args) -> BuildResult:
@@ -443,10 +465,11 @@ def build(args) -> BuildResult:
             "Cachi2 artifacts directory is not specified. Skip handling the prefetched sources."
         )
 
-    dest_image = f"{args.output_binary_image}.src"
-    build_result["image_url"] = dest_image
+    # dest_image = f"{args.output_binary_image}.src"
+    dest_images = generate_source_images(args.output_binary_image)
+    build_result["image_url"] = dest_images[-1]
 
-    build_and_push(work_dir, sib_dirs, args.bsi, dest_image, build_result)
+    build_and_push(work_dir, sib_dirs, args.bsi, dest_images, build_result)
     return build_result
 
 
