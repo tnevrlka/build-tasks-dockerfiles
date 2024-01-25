@@ -391,11 +391,8 @@ def build_and_push(
     ]
     log.debug("push source image %r", push_cmd)
     run(push_cmd, check=True)
-    try:
-        with open(digest_file, "r") as f:
-            build_result["image_digest"] = f.read().strip()
-    finally:
-        os.unlink(digest_file)
+    with open(digest_file, "r") as f:
+        build_result["image_digest"] = f.read().strip()
 
 
 def build(args) -> BuildResult:

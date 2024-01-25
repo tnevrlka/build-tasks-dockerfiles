@@ -115,7 +115,8 @@ def create_fake_dep_packages(cachi2_output_dir: str, deps: list[str]) -> None:
             with zipfile.ZipFile(os.path.join(packages_dir, filename), "w"):
                 pass
         else:
-            pass
+            with open(os.path.join(packages_dir, filename), "w") as f:
+                f.write("any data")
 
 
 class TestExtractBlobMember(unittest.TestCase):
@@ -708,7 +709,7 @@ class TestGatherPrefetchedSources(unittest.TestCase):
         self.assertFalse(result)
         self.assertListEqual([os.path.join(self.work_dir, "cachi2_env")], sib_dirs.extra_src_dirs)
 
-    def _test_gather_deps_by_package_manager(self, fetched_deps: list[str], dep_ext: str):
+    def _test_gather_deps_by_package_manager(self, fetched_deps: list[str], dep_exts: list[str]):
         self._mark_cachi2_has_run()
         create_fake_dep_packages(self.cachi2_output_dir, fetched_deps)
 
@@ -727,7 +728,8 @@ class TestGatherPrefetchedSources(unittest.TestCase):
         deps_with_known_file_ext = [item for item in fetched_deps if _has_known_file_ext(item)]
 
         prefetched_sources_dir = os.path.join(self.work_dir, "prefetched_sources")
-        # Check constructed directories: work_dir/prefetched_sources/src-N
+
+        # Check the expected number of constructed directories work_dir/prefetched_sources/src-N
         expected_src_dirs = [
             os.path.join(prefetched_sources_dir, f"src-{count}")
             for count in range(len(deps_with_known_file_ext))
@@ -736,10 +738,7 @@ class TestGatherPrefetchedSources(unittest.TestCase):
 
         gathered_deps = []  # collect the dep packages gathered by the method
         for dir_path, subdir_names, file_names in os.walk(prefetched_sources_dir):
-            for name in file_names:
-                if name.endswith(dep_ext):
-                    gathered_deps.append(name)
-
+            gathered_deps.extend(file_names)
         self.assertListEqual(
             sorted([os.path.basename(dep) for dep in deps_with_known_file_ext]),
             sorted(gathered_deps),
@@ -747,11 +746,11 @@ class TestGatherPrefetchedSources(unittest.TestCase):
 
     def test_gather_pip_deps(self):
         pip_deps = ["pip/requests-1.0.0.tar.gz", "pip/Flask-1.2.3.tar.gz"]
-        self._test_gather_deps_by_package_manager(pip_deps, ".tar.gz")
+        self._test_gather_deps_by_package_manager(pip_deps, [".tar.gz"])
 
     def test_gather_npm_deps(self):
         npm_deps = ["npm/has-1.0.3.tgz", "npm/express-4.18.1.tgz", "npm/bytes-3.1.2.tgz"]
-        self._test_gather_deps_by_package_manager(npm_deps, ".tgz")
+        self._test_gather_deps_by_package_manager(npm_deps, [".tgz"])
 
     def test_gather_go_deps(self):
         gomod_deps = [
@@ -759,7 +758,19 @@ class TestGatherPrefetchedSources(unittest.TestCase):
             "gomod/pkg/mod/cache/download/gopkg.in/yaml.v2/@v/v2.4.0.info",
             "gomod/pkg/mod/cache/download/github.com/go-logr/logr/@v/v1.2.3.lock",
         ]
-        self._test_gather_deps_by_package_manager(gomod_deps, ".zip")
+        self._test_gather_deps_by_package_manager(gomod_deps, [".zip"])
+
+    def test_all_package_managers_are_present(self):
+        deps = [
+            "gomod/pkg/mod/cache/download/github.com/go-logr/logr/@v/v1.2.3.lock",
+            "gomod/pkg/mod/cache/download/gopkg.in/yaml.v2/@v/v2.4.0.info",
+            "gomod/pkg/mod/cache/download/gopkg.in/yaml.v2/@v/v2.4.0.zip",
+            "npm/bytes-3.1.2.tgz",
+            "npm/express-4.18.1.tgz",
+            "npm/has-1.0.3.tgz",
+            "pip/requests-1.0.0.tar.gz",
+        ]
+        self._test_gather_deps_by_package_manager(deps, [".tar.gz", ".tgz", ".zip"])
 
 
 class TestBuildProcess(unittest.TestCase):
@@ -887,6 +898,11 @@ class TestBuildProcess(unittest.TestCase):
                 return completed_proc
 
             if run_cmd == ["skopeo", "inspect"]:
+                parent_source_image = cmd[-1]
+                self.assertNotIn(
+                    "@sha256:", parent_source_image, "digest is not removed from parent image"
+                )
+                # Indicate the source image of parent image exists
                 return Mock(returncode=0)
 
             if run_cmd == ["skopeo", "copy"]:
@@ -1006,7 +1022,6 @@ class TestBuildProcess(unittest.TestCase):
             "this test is for successful run, result should not include message field.",
         )
 
-    # @patch("source_build.run")
     def test_just_include_app_source(self):
         self._test_include_sources()
 
@@ -1015,9 +1030,8 @@ class TestBuildProcess(unittest.TestCase):
         self._test_include_sources(include_prefetched_sources=True)
 
     @patch("source_build.extract_blob_member")
-    @patch("os.unlink")
     @patch("tarfile.open")
-    def test_include_parent_image_sources(self, tarfile_open, unlink, extract_blob_member):
+    def test_include_parent_image_sources(self, tarfile_open, extract_blob_member):
         """
         Include sources from parent image. Like another test for gathering sources from parent
         image, go through the layers, but do not do real extraction from a tarball.
@@ -1027,9 +1041,8 @@ class TestBuildProcess(unittest.TestCase):
         )
 
     @patch("source_build.extract_blob_member")
-    @patch("os.unlink")
     @patch("tarfile.open")
-    def test_include_parent_image_sources_2(self, tarfile_open, unlink, extract_blob_member):
+    def test_include_parent_image_sources_2(self, tarfile_open, extract_blob_member):
         self._test_include_sources(
             include_parent_image_sources=True,
             parent_image_with_digest=True,
@@ -1037,9 +1050,8 @@ class TestBuildProcess(unittest.TestCase):
         )
 
     @patch("source_build.extract_blob_member")
-    @patch("os.unlink")
     @patch("tarfile.open")
-    def test_include_all_kinds_of_sources(self, tarfile_open, unlink, extract_blob_member):
+    def test_include_all_kinds_of_sources(self, tarfile_open, extract_blob_member):
         self._test_include_sources(
             include_prefetched_sources=True,
             include_parent_image_sources=True,
