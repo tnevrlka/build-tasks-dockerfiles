@@ -24,11 +24,14 @@ jobs:
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
     - name: Run checks
       run: |
-        sudo apt-get install -y python3-pip
         python3 -m pip install tox
-        tox -c ./source-container-build/app/tox.ini
+        cd ./source-container-build/app/
+        tox
     - name: Lint Dockerfile
       uses: hadolint/hadolint-action@v3.1.0
       with:

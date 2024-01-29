@@ -1,2 +1,6 @@
+*~
+
 .tox/
 .venv/
+.coverage
+__pycache__/
