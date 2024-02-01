@@ -18,6 +18,8 @@ from tempfile import mkdtemp, mkstemp
 import source_build
 from source_build import BuildResult, SourceImageBuildDirectories
 
+import pytest
+
 FAKE_BSI: Final = "/testing/bsi"
 OUTPUT_BINARY_IMAGE: Final = "registry/ns/app:v1"
 REPO_NAME: Final = "sourcebuildapp"
@@ -448,15 +450,22 @@ class TestPrepareBaseImageSources(unittest.TestCase):
     def test_do_nothing_if_no_associated_source_image(self, run):
         sib_dirs = SourceImageBuildDirectories()
 
-        def run_side_effect(cmd, **kwarg):
-            """Make registry_has_image return False"""
-            self.assertListEqual(
-                ["skopeo", "inspect", "--raw", f"docker://{self.PARENT_IMAGE}-source"],
-                cmd,
-            )
-            return Mock(returncode=1)
-
-        run.side_effect = run_side_effect
+        skopeo_inspect_config_rv = Mock()
+        skopeo_inspect_config_rv.stdout = json.dumps(
+            {"config": {"Labels": {"version": "9.3", "release": "1"}}}
+        )
+        skopeo_inspect_raw_rv = Mock()
+        skopeo_inspect_raw_rv.returncode = 1
+        skopeo_inspect_get_digest_rv = Mock()
+        skopeo_inspect_get_digest_rv.stdout = "sha256:123"
+        run.side_effect = [
+            # can't find out source image by version and release
+            skopeo_inspect_config_rv,
+            skopeo_inspect_raw_rv,
+            # can't find out source image by binary image digest
+            skopeo_inspect_get_digest_rv,
+            skopeo_inspect_raw_rv,
+        ]
 
         result = source_build.prepare_base_image_sources(self.PARENT_IMAGE, self.work_dir, sib_dirs)
         self.assertFalse(result)
@@ -467,7 +476,13 @@ class TestPrepareBaseImageSources(unittest.TestCase):
             skopeo_cmd = cmd[:2]
 
             if skopeo_cmd == ["skopeo", "inspect"]:
-                return Mock(reutrncode=0)
+                if cmd[2] == "--config":
+                    partial_config = json.dumps(
+                        {"config": {"Labels": {"version": "9.3", "release": "1"}}}
+                    )
+                    return Mock(stdout=partial_config)
+                if cmd[2] == "--raw":
+                    return Mock(returncode=0)
 
             if skopeo_cmd == ["skopeo", "copy"]:
                 # Write manifest.json to test the empty image (empty layers)
@@ -522,7 +537,13 @@ class TestPrepareBaseImageSources(unittest.TestCase):
             skopeo_cmd = cmd[:2]
 
             if skopeo_cmd == ["skopeo", "inspect"]:
-                return Mock(returncode=0)
+                if cmd[2] == "--config":
+                    partial_config = json.dumps(
+                        {"config": {"Labels": {"version": "9.3", "release": "1"}}}
+                    )
+                    return Mock(stdout=partial_config)
+                if cmd[2] == "--raw":
+                    return Mock(returncode=0)
 
             if skopeo_cmd == ["skopeo", "copy"]:
                 manifest = {
@@ -599,8 +620,16 @@ class TestPrepareBaseImageSources(unittest.TestCase):
         def run_side_effect(cmd, **kwargs):
             skopeo_cmd = cmd[:2]
 
-            if skopeo_cmd == ["skopeo", "inspect"]:
-                return Mock(returncode=0)
+            if cmd[2] == "--config":
+                partial_config = json.dumps(
+                    {"config": {"Labels": {"version": "9.3", "release": "1"}}}
+                )
+                return Mock(stdout=partial_config)
+
+            if cmd[2] == "--raw":
+                rv = Mock()
+                rv.returncode = 0
+                return rv
 
             if skopeo_cmd == ["skopeo", "copy"]:
                 # let_it_gather_parent_image_sources(dest_dir, tarfile_open)
@@ -903,13 +932,21 @@ class TestBuildProcess(unittest.TestCase):
                 return completed_proc
 
             if run_cmd == ["skopeo", "inspect"]:
-                if cmd[2] == "--raw":
-                    parent_source_image = cmd[-1]
-                    self.assertNotIn(
-                        "@sha256:", parent_source_image, "digest is not removed from parent image"
+                if parent_image_with_digest:
+                    dest_image = run_cmd[-1]
+                    self.assertNotIn(":9.3-1", dest_image, "tag is not removed from image pullspec")
+
+                if cmd[2] == "--config":
+                    return Mock(
+                        stdout=json.dumps(
+                            {"config": {"Labels": {"version": "9.3", "release": "1"}}}
+                        )
                     )
+
+                if cmd[2] == "--raw":
                     # Indicate the source image of parent image exists
                     return Mock(returncode=0)
+
                 if cmd[2] == "--format":
                     mock = Mock()
                     mock.stdout = self.BINARY_IMAGE_MANIFEST_DIGEST
@@ -1183,3 +1220,66 @@ class TestBuildProcess(unittest.TestCase):
         with patch("sys.argv", cli_cmd):
             with self.assertRaises(SystemExit):
                 source_build.main()
+
+
+class TestResolveSourceImageByVersionRelease(unittest.TestCase):
+    """Test resolve_source_image_by_version_release"""
+
+    @patch("source_build.run")
+    def test_binary_image_has_no_version_or_release_label(self, run: MagicMock):
+        tests = [{}, {"version": "9.3"}, {"release": "11"}]
+        for labels in tests:
+            mock_config = {"config": {"Labels": labels}}
+            skopeo_inspect_rv = Mock()
+            skopeo_inspect_rv.stdout = json.dumps(mock_config)
+            run.side_effect = [skopeo_inspect_rv]
+
+            with self.assertLogs(f"{source_build.logger.name}.resolve_source_image") as logs:
+                result = source_build.resolve_source_image_by_version_release(OUTPUT_BINARY_IMAGE)
+            self.assertIsNone(result)
+            self.assertIn("is not labelled with version and release", "\n".join(logs.output))
+
+    @patch("source_build.run")
+    def test_image_does_not_have_source_image(self, run: MagicMock):
+        skopeo_inspect_config_rv = Mock()
+        skopeo_inspect_config_rv.stdout = json.dumps(
+            {"config": {"Labels": {"version": "9.3", "release": "1"}}}
+        )
+        skopeo_inspect_raw_rv = Mock()
+        skopeo_inspect_raw_rv.returncode = 1
+        run.side_effect = [skopeo_inspect_config_rv, skopeo_inspect_raw_rv]
+
+        result = source_build.resolve_source_image_by_version_release(OUTPUT_BINARY_IMAGE)
+        self.assertIsNone(result)
+
+    @patch("source_build.run")
+    def test_source_image_is_resolved(self, run: MagicMock):
+        skopeo_inspect_config_rv = Mock()
+        skopeo_inspect_config_rv.stdout = json.dumps(
+            {"config": {"Labels": {"version": "9.3", "release": "1"}}}
+        )
+        skopeo_inspect_raw_rv = Mock()
+        skopeo_inspect_raw_rv.returncode = 0
+        run.side_effect = [skopeo_inspect_config_rv, skopeo_inspect_raw_rv]
+
+        source_image = source_build.resolve_source_image_by_version_release(OUTPUT_BINARY_IMAGE)
+
+        expected_source_image = OUTPUT_BINARY_IMAGE.split(":")[0] + ":9.3-1-source"
+        self.assertEqual(expected_source_image, source_image)
+
+
+@pytest.mark.parametrize(
+    "image_pullspec,expected",
+    [
+        ["ubuntu", "ubuntu"],
+        ["reg:3000", "reg:3000"],
+        ["reg:3000/img", "reg:3000/img"],
+        ["reg:3000/img:9.3", "reg:3000/img:9.3"],
+        ["reg:3000/img:9.3@sha256:123", "reg:3000/img@sha256:123"],
+        ["reg/org/img:9.3@sha256:123", "reg/org/img@sha256:123"],
+        ["reg/org/path/img:9.3", "reg/org/path/img:9.3"],
+        ["reg/org/path/img:9.3@sha256:123", "reg/org/path/img@sha256:123"],
+    ],
+)
+def test_drop_tag(image_pullspec, expected):
+    assert expected == source_build.drop_tag(image_pullspec)

@@ -152,6 +152,16 @@ def registry_has_image(image: str) -> bool:
     return run(cmd, capture_output=True).returncode == 0
 
 
+def fetch_image_config(image: str) -> str:
+    cmd = ["skopeo", "inspect", "--config", f"docker://{image}"]
+    return run(cmd, check=True, text=True, capture_output=True).stdout.strip()
+
+
+def fetch_image_manifest_digest(image: str) -> str:
+    cmd = ["skopeo", "inspect", "--format", "{{.Digest}}", "--no-tags", f"docker://{image}"]
+    return run(cmd, check=True, text=True, capture_output=True).stdout.strip()
+
+
 def create_dir(*components) -> str:
     path = os.path.join(*components)
     os.makedirs(path)
@@ -194,9 +204,9 @@ def prepare_base_image_sources(
     base_image_sources_dir = create_dir(work_dir, "base_image_sources")
     base_sources_extraction_dir = create_dir(base_image_sources_dir, "extraction_dir")
 
-    source_image_name = image + "-source"
+    source_image_name = resolve_source_image_by_version_release(image)
 
-    if not registry_has_image(source_image_name):
+    if not source_image_name:
         logger.warning(
             "The registry does not have corresponding source image %s", source_image_name
         )
@@ -396,11 +406,6 @@ def build_and_push(
         build_result["image_digest"] = f.read().strip()
 
 
-def fetch_image_manifest_digest(image: str) -> str:
-    cmd = ["skopeo", "inspect", "--format", "{{.Digest}}", "--no-tags", f"docker://{image}"]
-    return run(cmd, check=True, text=True, capture_output=True).stdout.strip()
-
-
 def generate_source_images(image: str) -> list[str]:
     """Generate source container images from the built binary image
 
@@ -415,6 +420,49 @@ def generate_source_images(image: str) -> list[str]:
     source_image = f"{image.rsplit(':', 1)[0]}:{digest.replace(':', '-')}.src"
 
     return [deprecated_image, source_image]
+
+
+def resolve_source_image_by_version_release(binary_image: str) -> str | None:
+    """Resolve source image by inspecting version and release of binary image
+
+    :param binary_image: str, resolve source image for this binary image. A valid image reference
+        should be passed, which then is inspected from the specified registry.
+    :return: the resolved source image. If no source image is resolved, None is returned.
+    """
+    log = logging.getLogger(f"{logger.name}.resolve_source_image")
+    # Expected form: version-release
+    image_config = fetch_image_config(binary_image)
+    config_data = json.loads(image_config)
+    version = config_data["config"]["Labels"].get("version")
+    release = config_data["config"]["Labels"].get("release")
+    if not (version and release):
+        log.warning("Image %s is not labelled with version and release.", binary_image)
+        return
+    # Remove possible tag or digest from binary image
+    image_name = binary_image.split("@")[0]
+    image_name = image_name.rsplit(":", 1)[0]
+    source_image = f"{image_name}:{version}-{release}-source"
+    if registry_has_image(source_image):
+        return source_image
+
+
+def drop_tag(image: str) -> str:
+    """Drop tag from an image pullspec if it includes both tag and digest
+
+    :param image: str, image pullspec.
+    :return: tag is removed from the given image pullspec and the result is returned.
+    :rtype: str
+    """
+    parts = image.split("@")
+    digest = ""
+    if len(parts) == 2:
+        digest = parts[1]
+    parts = parts[0].rsplit(":", 1)
+    has_tag = len(parts) == 2 or (len(parts) > 2 and "/" in parts[0])
+    if digest and has_tag:
+        # Drop the tag
+        return parts[0] + "@" + digest
+    return image
 
 
 def build(args) -> BuildResult:
@@ -442,16 +490,10 @@ def build(args) -> BuildResult:
 
     # Handle base image sources
     if args.base_images:
-        base_images = args.base_images.splitlines()
+        base_images: list[str] = args.base_images.splitlines()
         if len(base_images) > 1:
-            logger.info(
-                "Multiple base images are specified: %s", ", ".join(args.base_images.splitlines())
-            )
-        base_image = base_images[-1]
-        if "@sha256:" in base_image:
-            # Remove the digest in case it is included in the image.
-            # e.g. build-container.results.BASE_IMAGES_DIGESTS include it.
-            base_image = base_image.split("@")[0]
+            logger.info("Multiple base images are specified: %r", base_images)
+        base_image = drop_tag(base_images[-1])
         prepared = prepare_base_image_sources(base_image, work_dir, sib_dirs)
         build_result["base_image_source_included"] = prepared
     else:
@@ -465,7 +507,6 @@ def build(args) -> BuildResult:
             "Cachi2 artifacts directory is not specified. Skip handling the prefetched sources."
         )
 
-    # dest_image = f"{args.output_binary_image}.src"
     dest_images = generate_source_images(args.output_binary_image)
     build_result["image_url"] = dest_images[-1]
 
