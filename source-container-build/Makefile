@@ -1,5 +1,4 @@
-ORG := redhat-appstudio
-IMAGE = quay.io/$(ORG)/build-definitions-source-image-build-utils:latest
+IMAGE ?= quay.io/mytestworkload/build-definitions-source-image-build-utils:test-$(shell git rev-parse HEAD)
 
 .PHONY: image
 image:
