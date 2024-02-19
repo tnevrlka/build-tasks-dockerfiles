@@ -456,14 +456,9 @@ class TestPrepareBaseImageSources(unittest.TestCase):
         )
         skopeo_inspect_raw_rv = Mock()
         skopeo_inspect_raw_rv.returncode = 1
-        skopeo_inspect_get_digest_rv = Mock()
-        skopeo_inspect_get_digest_rv.stdout = "sha256:123"
         run.side_effect = [
             # can't find out source image by version and release
             skopeo_inspect_config_rv,
-            skopeo_inspect_raw_rv,
-            # can't find out source image by binary image digest
-            skopeo_inspect_get_digest_rv,
             skopeo_inspect_raw_rv,
         ]
 
