@@ -1271,15 +1271,14 @@ class TestResolveSourceImageByVersionRelease(unittest.TestCase):
 @pytest.mark.parametrize(
     "image_pullspec,expected",
     [
-        ["ubuntu", "ubuntu"],
-        ["reg:3000", "reg:3000"],
-        ["reg:3000/img", "reg:3000/img"],
-        ["reg:3000/img:9.3", "reg:3000/img:9.3"],
-        ["reg:3000/img:9.3@sha256:123", "reg:3000/img@sha256:123"],
-        ["reg/org/img:9.3@sha256:123", "reg/org/img@sha256:123"],
-        ["reg/org/path/img:9.3", "reg/org/path/img:9.3"],
-        ["reg/org/path/img:9.3@sha256:123", "reg/org/path/img@sha256:123"],
+        ["ubuntu", ("ubuntu", "", "")],
+        ["reg:3000", ("reg", "3000", "")],
+        ["reg:3000/img:9.3", ("reg:3000/img", "9.3", "")],
+        ["reg:3000/img:9.3@sha256:123", ("reg:3000/img", "9.3", "sha256:123")],
+        ["reg/org/img:9.3@sha256:123", ("reg/org/img", "9.3", "sha256:123")],
+        ["reg/org/path/img:9.3", ("reg/org/path/img", "9.3", "")],
+        ["reg/org/path/img:9.3@sha256:123", ("reg/org/path/img", "9.3", "sha256:123")],
     ],
 )
-def test_drop_tag(image_pullspec, expected):
-    assert expected == source_build.drop_tag(image_pullspec)
+def test_parse_image_name(image_pullspec, expected):
+    assert expected == source_build.parse_image_name(image_pullspec)
