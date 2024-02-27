@@ -23,6 +23,11 @@ import pytest
 FAKE_BSI: Final = "/testing/bsi"
 OUTPUT_BINARY_IMAGE: Final = "registry/ns/app:v1"
 REPO_NAME: Final = "sourcebuildapp"
+REGISTRY_ALLOWLIST: Final = """
+registry.example.io
+registry.access.example.com
+"""
+DISALLOWED_REGISTRY: Final = "registry.someone-hosted.io"
 
 
 @dataclass
@@ -440,12 +445,6 @@ class TestPrepareBaseImageSources(unittest.TestCase):
     def tearDown(self) -> None:
         shutil.rmtree(self.work_dir)
 
-    def test_do_nothing_with_unsupported_registry(self):
-        parent_image: Final = "registry.io/org/app:9.3-1234"
-        sib_dirs = SourceImageBuildDirectories()
-        result = source_build.prepare_base_image_sources(parent_image, self.work_dir, sib_dirs)
-        self.assertFalse(result)
-
     @patch("source_build.run")
     def test_do_nothing_if_no_associated_source_image(self, run):
         sib_dirs = SourceImageBuildDirectories()
@@ -857,6 +856,8 @@ class TestBuildProcess(unittest.TestCase):
             self.app_source_dirs.cloned_dir,
             "--output-binary-image",
             OUTPUT_BINARY_IMAGE,
+            "--registry-allowlist",
+            REGISTRY_ALLOWLIST,
         ]
         with patch("sys.argv", cli_cmd):
             with self.assertLogs(source_build.logger) as logs:
@@ -889,6 +890,8 @@ class TestBuildProcess(unittest.TestCase):
             invalid_git_repo,
             "--output-binary-image",
             OUTPUT_BINARY_IMAGE,
+            "--registry-allowlist",
+            REGISTRY_ALLOWLIST,
         ]
         with patch("sys.argv", cli_cmd):
             rc = source_build.main()
@@ -904,9 +907,9 @@ class TestBuildProcess(unittest.TestCase):
     def _test_include_sources(
         self,
         include_prefetched_sources: bool = False,
-        include_parent_image_sources: bool = False,
-        parent_image_with_digest: bool = False,
         mock_tarfile_open: MagicMock = None,
+        parent_images: str = "",
+        expect_parent_image_sources_included: bool = False,
     ):
         """Test include various sources and app source will always be included"""
 
@@ -927,7 +930,7 @@ class TestBuildProcess(unittest.TestCase):
                 return completed_proc
 
             if run_cmd == ["skopeo", "inspect"]:
-                if parent_image_with_digest:
+                if parent_images:
                     dest_image = run_cmd[-1]
                     self.assertNotIn(":9.3-1", dest_image, "tag is not removed from image pullspec")
 
@@ -1016,7 +1019,7 @@ class TestBuildProcess(unittest.TestCase):
                     else:
                         self.fail(f"Expected pip dependency {self.PIP_PKG} is not included.")
 
-                if include_parent_image_sources:
+                if expect_parent_image_sources_included:
                     self.assertIsNotNone(parser.srpms_dir)
                     self.assertTrue(os.path.exists(parser.srpms_dir))
 
@@ -1032,18 +1035,16 @@ class TestBuildProcess(unittest.TestCase):
             OUTPUT_BINARY_IMAGE,
             "--write-result-to",
             self.result_file,
+            "--registry-allowlist",
+            REGISTRY_ALLOWLIST,
         ]
         if include_prefetched_sources:
             cli_cmd.append("--cachi2-artifacts-dir")
             cli_cmd.append(self.cachi2_dir)
-        if include_parent_image_sources:
+
+        if parent_images:
             cli_cmd.append("--base-images")
-            if parent_image_with_digest:
-                cli_cmd.append(
-                    "\ngolang:2\n\nregistry.access.redhat.com/ubi9/ubi:9.3-1@sha256:123\n"
-                )
-            else:
-                cli_cmd.append("\ngolang:2\n\nregistry.access.redhat.com/ubi9/ubi:9.3-1\n")
+            cli_cmd.append(parent_images)
 
         with patch("sys.argv", cli_cmd):
             with patch("source_build.run") as mock_run:
@@ -1056,7 +1057,9 @@ class TestBuildProcess(unittest.TestCase):
         with open(self.result_file, "r") as f:
             build_result = json.loads(f.read())
         self.assertEqual("success", build_result["status"])
-        self.assertEqual(include_parent_image_sources, build_result["base_image_source_included"])
+        self.assertEqual(
+            expect_parent_image_sources_included, build_result["base_image_source_included"]
+        )
         self.assertEqual(include_prefetched_sources, build_result["dependencies_included"])
         self.assertEqual(self.FAKE_IMAGE_DIGEST, build_result["image_digest"])
         self.assertNotIn(
@@ -1088,16 +1091,18 @@ class TestBuildProcess(unittest.TestCase):
         image, go through the layers, but do not do real extraction from a tarball.
         """
         self._test_include_sources(
-            include_parent_image_sources=True, mock_tarfile_open=tarfile_open
+            mock_tarfile_open=tarfile_open,
+            parent_images="\ngolang:2\n\nregistry.access.example.com/ubi9/ubi:9.3-1\n",
+            expect_parent_image_sources_included=True,
         )
 
     @patch("source_build.extract_blob_member")
     @patch("tarfile.open")
     def test_include_parent_image_sources_2(self, tarfile_open, extract_blob_member):
         self._test_include_sources(
-            include_parent_image_sources=True,
-            parent_image_with_digest=True,
             mock_tarfile_open=tarfile_open,
+            parent_images="\ngolang:2\n\nregistry.access.example.com/ubi9/ubi:9.3-1@sha256:123\n",
+            expect_parent_image_sources_included=True,
         )
 
     @patch("source_build.extract_blob_member")
@@ -1105,8 +1110,20 @@ class TestBuildProcess(unittest.TestCase):
     def test_include_all_kinds_of_sources(self, tarfile_open, extract_blob_member):
         self._test_include_sources(
             include_prefetched_sources=True,
-            include_parent_image_sources=True,
             mock_tarfile_open=tarfile_open,
+            parent_images="\ngolang:2\n\nregistry.access.example.com/ubi9/ubi:9.3-1@sha256:123\n",
+            expect_parent_image_sources_included=True,
+        )
+
+    @patch("source_build.extract_blob_member")
+    @patch("tarfile.open")
+    def test_not_include_parent_image_sources_from_disallowed_registry(
+        self, tarfile_open, extract_blob_member
+    ):
+        self._test_include_sources(
+            mock_tarfile_open=tarfile_open,
+            parent_images=f"\ngolang:2\n\n{DISALLOWED_REGISTRY}/ubi9/ubi:9.3-1@sha256:123\n",
+            expect_parent_image_sources_included=False,
         )
 
     @patch("source_build.run")
@@ -1133,6 +1150,8 @@ class TestBuildProcess(unittest.TestCase):
             self.app_source_dirs.cloned_dir,
             "--output-binary-image",
             OUTPUT_BINARY_IMAGE,
+            "--registry-allowlist",
+            REGISTRY_ALLOWLIST,
         ]
         with patch("sys.argv", cli_cmd):
             with self.assertLogs(source_build.logger, level=logging.DEBUG) as logs:

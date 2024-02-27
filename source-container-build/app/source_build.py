@@ -11,11 +11,11 @@ import stat
 import sys
 import tarfile
 import tempfile
-import urllib.parse
 import filetype
 from dataclasses import dataclass, field
 from subprocess import run
 from typing import TypedDict, NotRequired, Literal, Final
+from urllib.parse import urlparse
 
 """
 Requires: git, skopeo, tar, BuildSourceImage
@@ -75,6 +75,10 @@ def arg_type_bsi_script(value):
 
 def arg_type_base_images(value):
     return value.strip()
+
+
+def arg_type_registry_allowlist(value: str) -> list[str]:
+    return [line for line in value.splitlines() if line]
 
 
 def get_repo_info(repo_path: str) -> RepoInfo:
@@ -144,6 +148,13 @@ def parse_cli_args():
         dest="result_file",
         help="Write execution result into this file.",
     )
+    parser.add_argument(
+        "--registry-allowlist",
+        type=arg_type_registry_allowlist,
+        required=True,
+        help="Resolve source images for parent images pulled from the registry listed here. "
+        "One registry per line.",
+    )
     return parser.parse_args()
 
 
@@ -193,13 +204,6 @@ def prepare_base_image_sources(
     image: str, work_dir: str, sib_dirs: SourceImageBuildDirectories
 ) -> bool:
     log = logging.getLogger("source-build.base-image-sources")
-    parts = urllib.parse.urlparse(f"docker://{image}")
-    if parts.netloc != "registry.access.redhat.com":
-        log.info(
-            "Image %s does not come from supported registry. Skip handling the sources from it.",
-            image,
-        )
-        return False
 
     base_image_sources_dir = create_dir(work_dir, "base_image_sources")
     base_sources_extraction_dir = create_dir(base_image_sources_dir, "extraction_dir")
@@ -491,8 +495,17 @@ def build(args) -> BuildResult:
         if len(base_images) > 1:
             logger.info("Multiple base images are specified: %r", base_images)
         base_image = base_images[-1]
-        prepared = prepare_base_image_sources(base_image, work_dir, sib_dirs)
-        build_result["base_image_source_included"] = prepared
+
+        allowed = urlparse("docker://" + base_image).netloc in args.registry_allowlist
+        if allowed:
+            prepared = prepare_base_image_sources(base_image, work_dir, sib_dirs)
+            build_result["base_image_source_included"] = prepared
+        else:
+            logger.info(
+                "Image %s does not come from supported allowed registry. "
+                "Skip handling the sources for it.",
+                base_image,
+            )
     else:
         logger.info("No base image is specified. Skip handling sources of base image.")
 
