@@ -310,7 +310,7 @@ def gather_prefetched_sources(
 
     def _find_prefetch_source_archives():
         guess_mime = filetype.guess_mime
-        for root, dirs, files in os.walk(cachi2_output_dir):
+        for root, _, files in os.walk(cachi2_output_dir):
             for filename in files:
                 mimetype = guess_mime(os.path.join(root, filename))
                 if mimetype and mimetype in ARCHIVE_MIMETYPES:
