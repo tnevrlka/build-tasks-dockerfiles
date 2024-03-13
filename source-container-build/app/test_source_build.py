@@ -126,6 +126,19 @@ def create_fake_dep_packages(cachi2_output_dir: str, deps: list[str]) -> None:
                 f.write("any data")
 
 
+def create_fake_dep_packages_with_content(cachi2_output_dir: str, deps: dict[str, bytes]) -> None:
+    for package, content in deps.items():
+        pkg_mgr_path, filename = os.path.split(package)
+        packages_dir = os.path.join(cachi2_output_dir, "deps", pkg_mgr_path)
+        os.makedirs(packages_dir, exist_ok=True)
+        if filename.endswith(".rpm"):
+            with open(os.path.join(packages_dir, filename), "wb") as f:
+                f.write(b"\xed\xab\xee\xdb" + content)
+        else:
+            with open(os.path.join(packages_dir, filename), "wb") as f:
+                f.write(content)
+
+
 class TestExtractBlobMember(unittest.TestCase):
     """Test extract_blob_member method"""
 
@@ -767,6 +780,23 @@ class TestGatherPrefetchedSources(unittest.TestCase):
             sorted(gathered_deps),
         )
 
+    def _test_gather_srpm_deps(self, fetched_deps: dict[str, bytes], expected_deps: list[str]):
+        self._mark_cachi2_has_run()
+        create_fake_dep_packages_with_content(self.cachi2_output_dir, fetched_deps)
+
+        sib_dirs = SourceImageBuildDirectories()
+        sib_dirs.rpm_dir = mkdtemp()
+        result = source_build.gather_prefetched_sources(self.work_dir, self.cachi2_dir, sib_dirs)
+        self.assertTrue(result)
+
+        gathered_srpm_deps = []  # collect the srpm dep packages gathered by the method
+        for dir_path, subdir_names, file_names in os.walk(sib_dirs.rpm_dir):
+            gathered_srpm_deps.extend(item for item in file_names if item.endswith(".src.rpm"))
+        self.assertListEqual(
+            sorted(expected_deps),
+            sorted(gathered_srpm_deps),
+        )
+
     def test_gather_pip_deps(self):
         pip_deps = ["pip/requests-1.0.0.tar.gz", "pip/Flask-1.2.3.tar.gz"]
         self._test_gather_deps_by_package_manager(pip_deps, [".tar.gz"])
@@ -782,6 +812,62 @@ class TestGatherPrefetchedSources(unittest.TestCase):
             "gomod/pkg/mod/cache/download/github.com/go-logr/logr/@v/v1.2.3.lock",
         ]
         self._test_gather_deps_by_package_manager(gomod_deps, [".zip"])
+
+    def test_gather_srpm_deps_unique(self):
+        srpm_deps = {
+            "output/sources/x86_64/fedora-source/gpm-1.20.7-42.fc38.src.rpm": os.urandom(4),
+            "output/sources/x86_64/updates-source/vim-9.1.113-1.fc38.src.rpm": os.urandom(4),
+            "output/.build-config.json": os.urandom(4),
+            "output/bom.json": os.urandom(4),
+            "output/x86_64/updates/vim-common-9.1.113-1.fc38.x86_64.rpm": os.urandom(4),
+            "output/x86_64/updates/vim-filesystem-9.1.113-1.fc38.noarch.rpm": os.urandom(4),
+            "output/x86_64/updates/vim-enhanced-9.1.113-1.fc38.x86_64.rpm": os.urandom(4),
+            "output/x86_64/fedora/gpm-libs-1.20.7-42.fc38.x86_64.rpm": os.urandom(4),
+        }
+
+        self._test_gather_srpm_deps(
+            srpm_deps, ["gpm-1.20.7-42.fc38.src.rpm", "vim-9.1.113-1.fc38.src.rpm"]
+        )
+
+    def test_gather_srpm_deps_collision_same_content(self):
+        srpm_deps = {
+            "output/sources/x86_64/fedora-source/gpm-1.20.7-42.fc38.src.rpm": os.urandom(4),
+            "output/sources/x86_64/updates-source/vim-9.1.113-1.fc38.src.rpm": b"\xfd\xab\xfe\xdb",
+            "output/sources/s390x/updates-source/vim-9.1.113-1.fc38.src.rpm": b"\xfd\xab\xfe\xdb",
+            "output/.build-config.json": os.urandom(4),
+            "output/bom.json": os.urandom(4),
+            "output/x86_64/updates/vim-common-9.1.113-1.fc38.x86_64.rpm": os.urandom(4),
+            "output/x86_64/updates/vim-filesystem-9.1.113-1.fc38.noarch.rpm": os.urandom(4),
+            "output/x86_64/updates/vim-enhanced-9.1.113-1.fc38.x86_64.rpm": os.urandom(4),
+            "output/x86_64/fedora/gpm-libs-1.20.7-42.fc38.x86_64.rpm": os.urandom(4),
+        }
+
+        self._test_gather_srpm_deps(
+            srpm_deps, ["gpm-1.20.7-42.fc38.src.rpm", "vim-9.1.113-1.fc38.src.rpm"]
+        )
+
+    def test_gather_srpm_deps_collision_unique_content(self):
+        srpm_deps = {
+            "output/sources/x86_64/fedora-source/gpm-1.20.7-42.fc38.src.rpm": os.urandom(4),
+            "output/sources/x86_64/updates-source/vim-9.1.113-1.fc38.src.rpm": b"\xfd\xab\xfe\xdb",
+            "output/sources/s390x/updates-source/vim-9.1.113-1.fc38.src.rpm": b"\xcd\xab\xfe\xdb",
+            "output/.build-config.json": os.urandom(4),
+            "output/bom.json": os.urandom(4),
+            "output/x86_64/updates/vim-common-9.1.113-1.fc38.x86_64.rpm": os.urandom(4),
+            "output/x86_64/updates/vim-filesystem-9.1.113-1.fc38.noarch.rpm": os.urandom(4),
+            "output/x86_64/updates/vim-enhanced-9.1.113-1.fc38.x86_64.rpm": os.urandom(4),
+            "output/x86_64/fedora/gpm-libs-1.20.7-42.fc38.x86_64.rpm": os.urandom(4),
+        }
+
+        self._test_gather_srpm_deps(
+            srpm_deps,
+            [
+                "gpm-1.20.7-42.fc38.src.rpm",
+                "vim-9.1.113-1.fc38.src.rpm",
+                "66ab0431683e4f376291ebd90d9f1f5e579063"
+                + "e185e77f7260c341d5d3c77ff8-vim-9.1.113-1.fc38.src.rpm",
+            ],
+        )
 
     def test_all_package_managers_are_present(self):
         deps = [

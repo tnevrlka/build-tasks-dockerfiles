@@ -12,6 +12,7 @@ import sys
 import tarfile
 import tempfile
 import filetype
+import hashlib
 from dataclasses import dataclass, field
 from subprocess import run
 from typing import TypedDict, NotRequired, Literal, Final
@@ -173,6 +174,15 @@ def fetch_image_manifest_digest(image: str) -> str:
     return run(cmd, check=True, text=True, capture_output=True).stdout.strip()
 
 
+# produces an artifact name that includes artifact's architecture
+# and repository id in the name
+def unique_srpm_artifact_name(file: str) -> str:
+    root, filename = os.path.split(file)
+    with open(file, "rb") as f:
+        digest = hashlib.file_digest(f, "sha256").hexdigest()
+        return f"{digest}-{filename}"
+
+
 def create_dir(*components) -> str:
     path = os.path.join(*components)
     os.makedirs(path)
@@ -316,6 +326,16 @@ def gather_prefetched_sources(
                 if mimetype and mimetype in ARCHIVE_MIMETYPES:
                     yield root, filename
 
+    def _find_prefetch_srpm_archives():
+        guess_mime = filetype.guess_mime
+        for root, dirs, files in os.walk(cachi2_output_dir):
+            dirs.sort()
+            for filename in sorted(files):
+                if filename.endswith(".src.rpm"):
+                    mimetype = guess_mime(os.path.join(root, filename))
+                    if mimetype and mimetype == "application/x-rpm":
+                        yield root, filename
+
     source_counter = itertools.count()
     prepared_sources_dir = create_dir(work_dir, "prefetched_sources")
     relative_to = os.path.relpath
@@ -331,7 +351,23 @@ def gather_prefetched_sources(
         shutil.copy(src, dest)
         sib_dirs.extra_src_dirs.append(f"{prepared_sources_dir}/{src_dir}")
 
-    gathered = next(source_counter) > 0
+    srpm_counter = itertools.count()
+    for root, filename in _find_prefetch_srpm_archives():
+        next(srpm_counter)
+        src = os.path.join(root, filename)
+        dest = os.path.join(sib_dirs.rpm_dir, filename)
+        if os.path.isfile(dest):
+            unique_src_name = unique_srpm_artifact_name(src)
+            unique_dest_name = unique_srpm_artifact_name(dest)
+            if unique_src_name != unique_dest_name:
+                dest = os.path.join(sib_dirs.rpm_dir, unique_src_name)
+            else:
+                log.debug("identical artifacts found for %s. skipping %s", dest, src)
+                continue
+        log.debug("copy prefetched rpm source %s to %s", src, dest)
+        shutil.copy(src, dest)
+
+    gathered = next(source_counter) + next(srpm_counter) > 0
     if not gathered:
         log.info("There is no prefetched source archive.")
 
