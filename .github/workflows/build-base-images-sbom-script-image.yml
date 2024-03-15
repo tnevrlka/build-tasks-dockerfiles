@@ -1,0 +1,59 @@
+name: Build base images sbom script image
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - base-images-sbom-script/**
+    
+  pull_request:
+    branches:
+      - main
+    paths:
+      - base-images-sbom-script/**
+
+
+env:
+  REGISTRY: quay.io/redhat-appstudio
+  IMAGE_NAME: base-images-sbom-script
+  
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: 3.11
+
+    - name: Run tox checks
+      run: |
+        python3 -m pip install tox
+        cd ./base-images-sbom-script/app/
+        tox
+
+    - name: Build Image
+      id: build-image
+      uses: redhat-actions/buildah-build@v2
+      with:
+        image: ${{ env.IMAGE_NAME }}
+        tags: ${{ github.sha }}
+        context: ./base-images-sbom-script
+        containerfiles: |
+            ./base-images-sbom-script/Dockerfile
+
+    - name: Push to Quay
+      if: github.event_name == 'push'  # don't push image from PR
+      uses: redhat-actions/push-to-registry@v2
+      with:
+        image: ${{ steps.build-image.outputs.image }}
+        tags: ${{ steps.build-image.outputs.tags }}
+        registry: ${{ env.REGISTRY }}
+        username: ${{ secrets.QUAY_USERNAME }}
+        password: ${{ secrets.QUAY_PASSWORD }}
+
