@@ -322,6 +322,7 @@ class TestBuildAndPush(unittest.TestCase):
 
         skopeo_copy_parser = argparse.ArgumentParser()
         skopeo_copy_parser.add_argument("--digestfile", required=True, dest="digest_file")
+        skopeo_copy_parser.add_argument("--retry-times")
         skopeo_copy_parser.add_argument("src")
         skopeo_copy_parser.add_argument("dest")
         try:

@@ -38,6 +38,8 @@ ARCHIVE_MIMETYPES = (
     "application/zip",
 )
 
+MAX_RETRIES: Final = 5
+
 
 class BuildResult(TypedDict):
     status: Literal["failure", "success"]
@@ -160,17 +162,26 @@ def parse_cli_args():
 
 
 def registry_has_image(image: str) -> bool:
-    cmd = ["skopeo", "inspect", "--raw", f"docker://{image}"]
+    cmd = ["skopeo", "inspect", "--raw", "--retry-times", str(MAX_RETRIES), f"docker://{image}"]
     return run(cmd, capture_output=True).returncode == 0
 
 
 def fetch_image_config(image: str) -> str:
-    cmd = ["skopeo", "inspect", "--config", f"docker://{image}"]
+    cmd = ["skopeo", "inspect", "--config", "--retry-times", str(MAX_RETRIES), f"docker://{image}"]
     return run(cmd, check=True, text=True, capture_output=True).stdout.strip()
 
 
 def fetch_image_manifest_digest(image: str) -> str:
-    cmd = ["skopeo", "inspect", "--format", "{{.Digest}}", "--no-tags", f"docker://{image}"]
+    cmd = [
+        "skopeo",
+        "inspect",
+        "--format",
+        "{{.Digest}}",
+        "--no-tags",
+        "--retry-times",
+        str(MAX_RETRIES),
+        f"docker://{image}",
+    ]
     return run(cmd, check=True, text=True, capture_output=True).stdout.strip()
 
 
@@ -226,7 +237,14 @@ def prepare_base_image_sources(
         )
         return False
 
-    cmd = ["skopeo", "copy", f"docker://{source_image_name}", f"dir:{base_sources_extraction_dir}"]
+    cmd = [
+        "skopeo",
+        "copy",
+        "--retry-times",
+        str(MAX_RETRIES),
+        f"docker://{source_image_name}",
+        f"dir:{base_sources_extraction_dir}",
+    ]
     log.info(
         "Copy source image %s into directory %s",
         source_image_name,
@@ -437,6 +455,8 @@ def build_and_push(
             "copy",
             "--digestfile",
             digest_file,
+            "--retry-times",
+            str(MAX_RETRIES),
             f"oci://{image_output_dir}:latest-source",
             f"docker://{dest_image}",
         ]
