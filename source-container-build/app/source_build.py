@@ -409,9 +409,37 @@ def make_source_archive(
     repo_info = get_repo_info(source_dir)
     name_sha = f"{repo_info['name']}-{repo_info['last_commit_sha']}"
     output_archive = f"{source_archive_dir}/{name_sha}.tar.gz"
-    git_cmd = ["git", "archive", "--prefix", name_sha + "/", "--output", output_archive, "HEAD"]
-    log.debug("Generate source archive %r", git_cmd)
-    run(git_cmd, check=True, cwd=source_dir)
+
+    stash_cmd = ["git", "stash"]
+    log.debug("Stashing any changes to working repo %r", stash_cmd)
+    run(stash_cmd, check=True, cwd=source_dir)
+
+    mtime_cmd = ["git", "show", "-s", "--format=%cI"]
+    log.debug("Collecting timestamp of the commit at HEAD %r", mtime_cmd)
+    mtime_process = run(mtime_cmd, check=True, cwd=source_dir, capture_output=True, text=True)
+    mtime = mtime_process.stdout.strip()
+
+    ls_cmd = ["git", "ls-files", "--recurse-submodules"]
+    log.debug("Generate source repo file list %r", ls_cmd)
+    git_process = run(ls_cmd, check=True, cwd=source_dir, capture_output=True, text=True)
+
+    tar_cmd = [
+        "tar",
+        "caf",
+        output_archive,
+        "--mtime",
+        mtime,
+        "--transform",
+        f"s,^,{name_sha}/,",
+        "-T-",
+    ]
+    log.debug("Generate source archive %r", tar_cmd)
+    run(tar_cmd, input=git_process.stdout.encode("utf-8"), check=True, cwd=source_dir)
+
+    pop_cmd = ["git", "stash", "pop"]
+    log.debug("Popping any stashed changes to working repo %r", pop_cmd)
+    run(pop_cmd, cwd=source_dir)
+
     log.info("add source archive directory to sources for bsi: %s", source_archive_dir)
     sib_dirs.extra_src_dirs.append(source_archive_dir)
 

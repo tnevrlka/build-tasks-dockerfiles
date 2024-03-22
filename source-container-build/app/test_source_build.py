@@ -1016,6 +1016,16 @@ class TestBuildProcess(unittest.TestCase):
                 completed_proc.stdout = "https://githost/org/app.git"
                 return completed_proc
 
+            if run_cmd == ["git", "ls-files"]:
+                completed_proc = Mock()
+                completed_proc.stdout = "file.txt"
+                return completed_proc
+
+            if run_cmd == ["git", "show"]:
+                completed_proc = Mock()
+                completed_proc.stdout = "2024-03-20T21:57:06-04:00"
+                return completed_proc
+
             if run_cmd == ["skopeo", "inspect"]:
                 if parent_images:
                     dest_image = run_cmd[-1]
