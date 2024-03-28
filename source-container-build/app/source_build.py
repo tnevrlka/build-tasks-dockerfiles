@@ -222,33 +222,23 @@ def extract_blob_member(
 
 
 def prepare_base_image_sources(
-    image: str, work_dir: str, sib_dirs: SourceImageBuildDirectories
+    source_image: str, work_dir: str, sib_dirs: SourceImageBuildDirectories
 ) -> bool:
     log = logging.getLogger("source-build.base-image-sources")
 
     base_image_sources_dir = create_dir(work_dir, "base_image_sources")
     base_sources_extraction_dir = create_dir(base_image_sources_dir, "extraction_dir")
 
-    source_image_name = resolve_source_image_by_version_release(image)
-
-    if not source_image_name:
-        logger.warning(
-            "The registry does not have corresponding source image %s", source_image_name
-        )
-        return False
-
     cmd = [
         "skopeo",
         "copy",
         "--retry-times",
         str(MAX_RETRIES),
-        f"docker://{source_image_name}",
+        f"docker://{source_image}",
         f"dir:{base_sources_extraction_dir}",
     ]
     log.info(
-        "Copy source image %s into directory %s",
-        source_image_name,
-        str(base_sources_extraction_dir),
+        "Copy source image %s into directory %s", source_image, str(base_sources_extraction_dir)
     )
     run(cmd, check=True)
 
@@ -580,8 +570,12 @@ def build(args) -> BuildResult:
 
         allowed = urlparse("docker://" + base_image).netloc in args.registry_allowlist
         if allowed:
-            prepared = prepare_base_image_sources(base_image, work_dir, sib_dirs)
-            build_result["base_image_source_included"] = prepared
+            source_image = resolve_source_image_by_version_release(base_image)
+            if source_image:
+                prepared = prepare_base_image_sources(source_image, work_dir, sib_dirs)
+                build_result["base_image_source_included"] = prepared
+            else:
+                logger.warning("Registry does not have source image %s", source_image)
         else:
             logger.info(
                 "Image %s does not come from supported allowed registry. "

@@ -448,37 +448,9 @@ class TestPrepareBaseImageSources(unittest.TestCase):
         shutil.rmtree(self.work_dir)
 
     @patch("source_build.run")
-    def test_do_nothing_if_no_associated_source_image(self, run):
-        sib_dirs = SourceImageBuildDirectories()
-
-        skopeo_inspect_config_rv = Mock()
-        skopeo_inspect_config_rv.stdout = json.dumps(
-            {"config": {"Labels": {"version": "9.3", "release": "1"}}}
-        )
-        skopeo_inspect_raw_rv = Mock()
-        skopeo_inspect_raw_rv.returncode = 1
-        run.side_effect = [
-            # can't find out source image by version and release
-            skopeo_inspect_config_rv,
-            skopeo_inspect_raw_rv,
-        ]
-
-        result = source_build.prepare_base_image_sources(self.PARENT_IMAGE, self.work_dir, sib_dirs)
-        self.assertFalse(result)
-
-    @patch("source_build.run")
     def test_nothing_is_gathered_if_parent_image_source_is_empty(self, run):
         def run_side_effect(cmd, **kwargs):
             skopeo_cmd = cmd[:2]
-
-            if skopeo_cmd == ["skopeo", "inspect"]:
-                if cmd[2] == "--config":
-                    partial_config = json.dumps(
-                        {"config": {"Labels": {"version": "9.3", "release": "1"}}}
-                    )
-                    return Mock(stdout=partial_config)
-                if cmd[2] == "--raw":
-                    return Mock(returncode=0)
 
             if skopeo_cmd == ["skopeo", "copy"]:
                 # Write manifest.json to test the empty image (empty layers)
@@ -531,15 +503,6 @@ class TestPrepareBaseImageSources(unittest.TestCase):
 
         def run_side_effect(cmd, **kwargs):
             skopeo_cmd = cmd[:2]
-
-            if skopeo_cmd == ["skopeo", "inspect"]:
-                if cmd[2] == "--config":
-                    partial_config = json.dumps(
-                        {"config": {"Labels": {"version": "9.3", "release": "1"}}}
-                    )
-                    return Mock(stdout=partial_config)
-                if cmd[2] == "--raw":
-                    return Mock(returncode=0)
 
             if skopeo_cmd == ["skopeo", "copy"]:
                 manifest = {
@@ -615,17 +578,6 @@ class TestPrepareBaseImageSources(unittest.TestCase):
 
         def run_side_effect(cmd, **kwargs):
             skopeo_cmd = cmd[:2]
-
-            if cmd[2] == "--config":
-                partial_config = json.dumps(
-                    {"config": {"Labels": {"version": "9.3", "release": "1"}}}
-                )
-                return Mock(stdout=partial_config)
-
-            if cmd[2] == "--raw":
-                rv = Mock()
-                rv.returncode = 0
-                return rv
 
             if skopeo_cmd == ["skopeo", "copy"]:
                 # let_it_gather_parent_image_sources(dest_dir, tarfile_open)
@@ -985,6 +937,7 @@ class TestBuildProcess(unittest.TestCase):
         mock_tarfile_open: MagicMock = None,
         parent_images: str = "",
         expect_parent_image_sources_included: bool = False,
+        mock_nonexisting_source_image: bool = False,
     ):
         """Test include various sources and app source will always be included"""
 
@@ -1028,7 +981,10 @@ class TestBuildProcess(unittest.TestCase):
 
                 if cmd[2] == "--raw":
                     # Indicate the source image of parent image exists
-                    return Mock(returncode=0)
+                    if mock_nonexisting_source_image:
+                        return Mock(returncode=1)
+                    else:
+                        return Mock(returncode=0)
 
                 if cmd[2] == "--format":
                     mock = Mock()
@@ -1188,6 +1144,16 @@ class TestBuildProcess(unittest.TestCase):
             mock_tarfile_open=tarfile_open,
             parent_images="\ngolang:2\n\nregistry.access.example.com/ubi9/ubi:9.3-1@sha256:123\n",
             expect_parent_image_sources_included=True,
+        )
+
+    @patch("source_build.extract_blob_member")
+    @patch("tarfile.open")
+    def test_registry_does_not_have_source_image(self, tarfile_open, extract_blob_member):
+        self._test_include_sources(
+            mock_tarfile_open=tarfile_open,
+            parent_images="\ngolang:2\n\nregistry.access.example.com/ubi9/ubi:9.3-1@sha256:123\n",
+            expect_parent_image_sources_included=False,
+            mock_nonexisting_source_image=True,
         )
 
     @patch("source_build.extract_blob_member")
