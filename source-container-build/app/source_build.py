@@ -444,14 +444,9 @@ def make_source_archive(
     sib_dirs.extra_src_dirs.append(source_archive_dir)
 
 
-def build_and_push(
-    work_dir: str,
-    sib_dirs: SourceImageBuildDirectories,
-    bsi_script: str,
-    dest_images: list[str],
-    build_result: BuildResult,
-) -> None:
-    log = logging.getLogger("source-build.build-and-push")
+def build_source_image_in_local(
+    bsi_script: str, work_dir: str, sib_dirs: SourceImageBuildDirectories
+) -> str:
     bsi_build_base_dir = create_dir(work_dir, "bsi_build")
     image_output_dir = create_dir(work_dir, "bsi_output")
 
@@ -471,12 +466,15 @@ def build_and_push(
     if os.environ.get("BSI_DEBUG"):
         bsi_cmd.append("-D")
 
-    log.debug("build source image %r", bsi_cmd)
+    logger.debug("build source image %r", bsi_cmd)
     run(bsi_cmd, check=True)
+    return image_output_dir
 
-    # push to registry
+
+def push_to_registry(image_build_output_dir: str, dest_images: list[str]) -> str:
     fd, digest_file = tempfile.mkstemp()
     os.close(fd)
+    src = f"oci://{image_build_output_dir}:latest-source"
     for dest_image in dest_images:
         push_cmd = [
             "skopeo",
@@ -485,13 +483,13 @@ def build_and_push(
             digest_file,
             "--retry-times",
             str(MAX_RETRIES),
-            f"oci://{image_output_dir}:latest-source",
-            f"docker://{dest_image}",
+            src,
+            "docker://" + dest_image,
         ]
-        log.debug("push source image %r", push_cmd)
+        logger.debug("push source image %r", push_cmd)
         run(push_cmd, check=True)
     with open(digest_file, "r") as f:
-        build_result["image_digest"] = f.read().strip()
+        return f.read().strip()
 
 
 def generate_source_images(image: str) -> list[str]:
@@ -604,7 +602,9 @@ def build(args) -> BuildResult:
     dest_images = generate_source_images(args.output_binary_image)
     build_result["image_url"] = dest_images[-1]
 
-    build_and_push(work_dir, sib_dirs, args.bsi, dest_images, build_result)
+    image_output_dir = build_source_image_in_local(args.bsi, work_dir, sib_dirs)
+    image_digest = push_to_registry(image_output_dir, dest_images)
+    build_result["image_digest"] = image_digest
     return build_result
 
 

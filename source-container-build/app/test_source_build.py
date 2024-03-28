@@ -297,10 +297,8 @@ class TestMakeSourceArchive(unittest.TestCase):
             )
 
 
-class TestBuildAndPush(unittest.TestCase):
-    """Test build_and_push"""
-
-    DEST_IMAGE: Final = "registry/org/app:sha256-1234567.src"
+class TestBuildSourceInLocal(unittest.TestCase):
+    """Test build_source_image_in_local"""
 
     def setUp(self) -> None:
         self.work_dir = mkdtemp()
@@ -316,33 +314,14 @@ class TestBuildAndPush(unittest.TestCase):
         for item in self.sib_dirs.extra_src_dirs:
             shutil.rmtree(item)
 
-    def _assert_skopeo_copy(self, mock_run: MagicMock) -> None:
-        skopeo_cmd = mock_run.mock_calls[1].args[0]
-        self.assertListEqual(["skopeo", "copy"], skopeo_cmd[:2])
-
-        skopeo_copy_parser = argparse.ArgumentParser()
-        skopeo_copy_parser.add_argument("--digestfile", required=True, dest="digest_file")
-        skopeo_copy_parser.add_argument("--retry-times")
-        skopeo_copy_parser.add_argument("src")
-        skopeo_copy_parser.add_argument("dest")
-        try:
-            args = skopeo_copy_parser.parse_args(skopeo_cmd[2:])
-        except argparse.ArgumentTypeError:
-            self.fail("skopeo-copy command format is incorrect.")
-        self.assertEqual(f"oci://{self.expected_bsi_output_path}:latest-source", args.src)
-        self.assertEqual(f"docker://{self.DEST_IMAGE}", args.dest)
-
     @patch("source_build.run")
-    def test_build_and_push_all_kind_of_sources(self, run):
-        build_result: BuildResult = {}
+    def test_build_with_all_kind_of_sources(self, run: MagicMock):
         # Compose SRPMs and extra sources
         self.sib_dirs.rpm_dir = mkdtemp()
         extra_src_dir0 = mkdtemp()
         self.sib_dirs.extra_src_dirs.append(extra_src_dir0)
 
-        source_build.build_and_push(
-            self.work_dir, self.sib_dirs, FAKE_BSI, [self.DEST_IMAGE], build_result
-        )
+        source_build.build_source_image_in_local(FAKE_BSI, self.work_dir, self.sib_dirs)
 
         bsi_cmd = run.mock_calls[0].args[0]
         self.assertEqual(FAKE_BSI, bsi_cmd[0])
@@ -356,14 +335,11 @@ class TestBuildAndPush(unittest.TestCase):
         self.assertEqual([extra_src_dir0], args.extra_src_dirs)
 
     @patch("source_build.run")
-    def test_build_with_srpms_only(self, run):
-        build_result: BuildResult = {}
+    def test_build_with_srpms_only(self, run: MagicMock):
         self.sib_dirs.rpm_dir = mkdtemp()
         # extra_src_dirs is empty, which indicates that no extra source will be composed.
 
-        source_build.build_and_push(
-            self.work_dir, self.sib_dirs, FAKE_BSI, [self.DEST_IMAGE], build_result
-        )
+        source_build.build_source_image_in_local(FAKE_BSI, self.work_dir, self.sib_dirs)
 
         bsi_cmd = run.mock_calls[0].args[0]
         self.assertEqual(FAKE_BSI, bsi_cmd[0])
@@ -377,18 +353,13 @@ class TestBuildAndPush(unittest.TestCase):
         self.assertEqual(self.expected_bsi_output_path, args.output_path)
         self.assertIsNone(args.extra_src_dirs, "should not add extra sources")
 
-        self._assert_skopeo_copy(run)
-
     @patch("source_build.run")
-    def test_build_with_extra_sources_only(self, run):
-        build_result: BuildResult = {}
+    def test_build_with_extra_sources_only(self, run: MagicMock):
         # rpm_dir is empty, which indicates that no SRPMs will be composed.
         extra_src_dir0 = mkdtemp()
         self.sib_dirs.extra_src_dirs.append(extra_src_dir0)
 
-        source_build.build_and_push(
-            self.work_dir, self.sib_dirs, FAKE_BSI, [self.DEST_IMAGE], build_result
-        )
+        source_build.build_source_image_in_local(FAKE_BSI, self.work_dir, self.sib_dirs)
 
         bsi_cmd = run.mock_calls[0].args[0]
         self.assertEqual(FAKE_BSI, bsi_cmd[0])
@@ -402,35 +373,6 @@ class TestBuildAndPush(unittest.TestCase):
         self.assertIsNone(args.srpms_dir, "should not add SRPMs")
         self.assertListEqual([extra_src_dir0], args.extra_src_dirs)
 
-        self._assert_skopeo_copy(run)
-
-    @patch("source_build.run")
-    def test_source_image_digest_is_included_in_result(self, run):
-        digest: Final = "1234567"
-        digest_file = ""
-
-        def run_side_effect(cmd, **kwargs):
-            if cmd[0] != "skopeo":
-                return
-            # Write image digest to digest file for verification later
-            digest_file = cmd[3]
-            with open(digest_file, "w") as f:
-                f.write(digest)
-
-        run.side_effect = run_side_effect
-        build_result: BuildResult = {}
-        self.sib_dirs.extra_src_dirs.append(mkdtemp())
-
-        source_build.build_and_push(
-            self.work_dir, self.sib_dirs, FAKE_BSI, [self.DEST_IMAGE], build_result
-        )
-
-        self.assertEqual(digest, build_result["image_digest"])
-        self.assertFalse(
-            os.path.exists(digest_file),
-            f"temporary digest file {digest_file} is not deleted",
-        )
-
     def test_raise_error_when_bsi_process_fails(self):
         # fake_bsi fail the process
         fd, fake_bsi = mkstemp()
@@ -438,16 +380,62 @@ class TestBuildAndPush(unittest.TestCase):
         os.unlink(fake_bsi)
 
         with self.assertRaises(FileNotFoundError):
-            source_build.build_and_push(self.work_dir, self.sib_dirs, fake_bsi, "", {})
+            source_build.build_source_image_in_local(fake_bsi, self.work_dir, self.sib_dirs)
 
     @patch("source_build.run")
     @patch.dict("os.environ", {"BSI_DEBUG": "1"})
-    def test_enable_bsi_debug_mode(self, run):
-        source_build.build_and_push(self.work_dir, self.sib_dirs, FAKE_BSI, [self.DEST_IMAGE], {})
+    def test_enable_bsi_debug_mode(self, run: MagicMock):
+        source_build.build_source_image_in_local(FAKE_BSI, self.work_dir, self.sib_dirs)
 
         bsi_cmd = run.mock_calls[0].args[0]
         args = create_bsi_cli_parser().parse_args(bsi_cmd[1:])
         self.assertTrue(args.debug_mode)
+
+
+class TestPushToRegistry(unittest.TestCase):
+    """Test push_to_registry"""
+
+    DEST_IMAGE: Final = "registry/org/app:sha256-1234567.src"
+
+    def _parse_skopeo_copy_cmd(self, cmd):
+        parser = argparse.ArgumentParser(description="used for testing")
+        subparsers = parser.add_subparsers(description="subcommands")
+        copy_parser = subparsers.add_parser("copy")
+        copy_parser.add_argument("--digestfile", dest="digest_file")
+        copy_parser.add_argument("--retry-times")
+        copy_parser.add_argument("src")
+        copy_parser.add_argument("dest")
+        return parser.parse_args(cmd)
+
+    def _assert_skopeo_copy(self, run: MagicMock, dest_images: list[str]) -> None:
+        self.assertEqual(len(run.mock_calls), len(dest_images))
+        for run_call, dest_image in zip(run.mock_calls, dest_images):
+            skopeo_cmd = run_call.args[0]
+            args = self._parse_skopeo_copy_cmd(skopeo_cmd[1:])
+            self.assertEqual("oci:///path/to/image_output:latest-source", args.src)
+            self.assertEqual(f"docker://{dest_image}", args.dest)
+
+    def _skopeo_copy_run(self, cmd, **kwargs) -> None:
+        self.assertListEqual(["skopeo", "copy"], cmd[0:2])
+        args = self._parse_skopeo_copy_cmd(cmd[1:])
+        self.assertIsNotNone(args.digest_file, "Missing digest file")
+        with open(args.digest_file, "w", encoding="utf-8") as f:
+            f.write("1234567")
+
+    @patch("source_build.run")
+    def test_push_to_registry(self, run: MagicMock):
+        run.side_effect = self._skopeo_copy_run
+        dest_images = [self.DEST_IMAGE]
+        digest = source_build.push_to_registry("/path/to/image_output", dest_images)
+        self._assert_skopeo_copy(run, dest_images)
+        self.assertEqual(digest, "1234567")
+
+    @patch("source_build.run")
+    def test_push_multiple_images_to_registry(self, run: MagicMock):
+        run.side_effect = self._skopeo_copy_run
+        dest_images = [self.DEST_IMAGE, self.DEST_IMAGE + ".src"]
+        source_build.push_to_registry("/path/to/image_output", dest_images)
+        self._assert_skopeo_copy(run, dest_images)
 
 
 class TestPrepareBaseImageSources(unittest.TestCase):
