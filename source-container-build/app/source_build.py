@@ -185,6 +185,16 @@ def fetch_image_manifest_digest(image: str) -> str:
     return run(cmd, check=True, text=True, capture_output=True).stdout.strip()
 
 
+def skopeo_copy(src: str, dest: str, digest_file: str = "") -> None:
+    flags = ["--retry-times", str(MAX_RETRIES)]
+    if digest_file:
+        flags.append("--digestfile")
+        flags.append(digest_file)
+    cmd = ["skopeo", "copy", *flags, src, dest]
+    logger.debug("copy image: %r", cmd)
+    run(cmd, check=True)
+
+
 # produces an artifact name that includes artifact's architecture
 # and repository id in the name
 def unique_srpm_artifact_name(file: str) -> str:
@@ -229,18 +239,8 @@ def prepare_base_image_sources(
     base_image_sources_dir = create_dir(work_dir, "base_image_sources")
     base_sources_extraction_dir = create_dir(base_image_sources_dir, "extraction_dir")
 
-    cmd = [
-        "skopeo",
-        "copy",
-        "--retry-times",
-        str(MAX_RETRIES),
-        f"docker://{source_image}",
-        f"dir:{base_sources_extraction_dir}",
-    ]
-    log.info(
-        "Copy source image %s into directory %s", source_image, str(base_sources_extraction_dir)
-    )
-    run(cmd, check=True)
+    log.info("Copy source image %s into directory %s", source_image, base_sources_extraction_dir)
+    skopeo_copy(f"docker://{source_image}", f"dir:{base_sources_extraction_dir}")
 
     # bsi reads source RPMs from this directory
     bsi_rpms_dir = create_dir(base_image_sources_dir, "bsi_rpms_dir")
@@ -466,18 +466,8 @@ def push_to_registry(image_build_output_dir: str, dest_images: list[str]) -> str
     os.close(fd)
     src = f"oci://{image_build_output_dir}:latest-source"
     for dest_image in dest_images:
-        push_cmd = [
-            "skopeo",
-            "copy",
-            "--digestfile",
-            digest_file,
-            "--retry-times",
-            str(MAX_RETRIES),
-            src,
-            "docker://" + dest_image,
-        ]
-        logger.debug("push source image %r", push_cmd)
-        run(push_cmd, check=True)
+        logger.debug("push source image %r", dest_image)
+        skopeo_copy(src, f"docker://{dest_image}", digest_file=digest_file)
     with open(digest_file, "r") as f:
         return f.read().strip()
 

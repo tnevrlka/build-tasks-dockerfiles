@@ -102,6 +102,17 @@ def create_bsi_cli_parser():
     return parser
 
 
+def create_skopeo_cli_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="used for testing")
+    subparsers = parser.add_subparsers(description="subcommands")
+    copy_parser = subparsers.add_parser("copy")
+    copy_parser.add_argument("--digestfile", dest="digest_file")
+    copy_parser.add_argument("--retry-times")
+    copy_parser.add_argument("src")
+    copy_parser.add_argument("dest")
+    return parser
+
+
 def create_fake_dep_packages(cachi2_output_dir: str, deps: list[str]) -> None:
     """Create fake prefetched dependency packages
 
@@ -398,14 +409,7 @@ class TestPushToRegistry(unittest.TestCase):
     DEST_IMAGE: Final = "registry/org/app:sha256-1234567.src"
 
     def _parse_skopeo_copy_cmd(self, cmd):
-        parser = argparse.ArgumentParser(description="used for testing")
-        subparsers = parser.add_subparsers(description="subcommands")
-        copy_parser = subparsers.add_parser("copy")
-        copy_parser.add_argument("--digestfile", dest="digest_file")
-        copy_parser.add_argument("--retry-times")
-        copy_parser.add_argument("src")
-        copy_parser.add_argument("dest")
-        return parser.parse_args(cmd)
+        return create_skopeo_cli_parser().parse_args(cmd)
 
     def _assert_skopeo_copy(self, run: MagicMock, dest_images: list[str]) -> None:
         self.assertEqual(len(run.mock_calls), len(dest_images))
@@ -992,13 +996,13 @@ class TestBuildProcess(unittest.TestCase):
                     return mock
 
             if run_cmd == ["skopeo", "copy"]:
-                if cmd[2] == "--digestfile":
+                args = create_skopeo_cli_parser().parse_args(cmd[1:])
+                if args.digest_file:
                     # copy for pushing the source image to registry
-                    digest_file = cmd[3]
-                    with open(digest_file, "w") as f:
+                    with open(args.digest_file, "w") as f:
                         f.write(self.FAKE_IMAGE_DIGEST)
 
-                    pushed_images.append(cmd[-1].removeprefix("docker://"))
+                    pushed_images.append(args.dest.removeprefix("docker://"))
                 else:
                     # copy for download parent image sources
                     # to simulate the download, write manifest.json and mock the tarfile.open
@@ -1017,7 +1021,7 @@ class TestBuildProcess(unittest.TestCase):
                             },
                         ],
                     }
-                    _, image_download_dir = cmd[-1].split(":")
+                    _, image_download_dir = args.dest.split(":")
                     with open(os.path.join(image_download_dir, "manifest.json"), "w") as f:
                         json.dump(manifest, f)
 
