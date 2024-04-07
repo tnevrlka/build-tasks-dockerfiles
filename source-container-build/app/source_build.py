@@ -9,13 +9,13 @@ import shutil
 import logging
 import stat
 import sys
-import tarfile
 import tempfile
 import filetype
 import hashlib
 from dataclasses import dataclass, field
+from pathlib import Path
 from subprocess import run
-from typing import TypedDict, NotRequired, Literal, Final
+from typing import Any, TypedDict, NotRequired, Literal, Final
 from urllib.parse import urlparse
 
 """
@@ -185,11 +185,22 @@ def fetch_image_manifest_digest(image: str) -> str:
     return run(cmd, check=True, text=True, capture_output=True).stdout.strip()
 
 
-def skopeo_copy(src: str, dest: str, digest_file: str = "") -> None:
+def skopeo_copy(
+    src: str, dest: str, digest_file: str = "", remove_signatures: bool = False
+) -> None:
+    """Execute skopeo-copy
+
+    :param src: str, same as source-image argument.
+    :param dest: str, same as destination-image argumnet.
+    :param digest_file: bool, map to the ``--digestfile`` argument.
+    :param remove_signatures: bool, map to the ``--remove-signatures`` argument.
+    """
     flags = ["--retry-times", str(MAX_RETRIES)]
     if digest_file:
         flags.append("--digestfile")
         flags.append(digest_file)
+    if remove_signatures:
+        flags.append("--remove-signatures")
     cmd = ["skopeo", "copy", *flags, src, dest]
     logger.debug("copy image: %r", cmd)
     run(cmd, check=True)
@@ -208,108 +219,6 @@ def create_dir(*components) -> str:
     path = os.path.join(*components)
     os.makedirs(path)
     return path
-
-
-def extract_blob_member(
-    tar_archive: str, member: str, dest_dir: str, rename_to: str, work_dir: str, log: logging.Logger
-) -> None:
-    """Extract a blob member and rename it."""
-    # strip 3 components: ./blobs/sha256
-    tar_cmd = [
-        "tar",
-        "--extract",
-        "-C",
-        dest_dir,
-        "--strip-components",
-        "3",
-        "-f",
-        tar_archive,
-        member,
-    ]
-    log.debug("extract blob member %r", tar_cmd)
-    run(tar_cmd, check=True, cwd=work_dir)
-    shutil.move(f"{dest_dir}/{os.path.basename(member)}", f"{dest_dir}/{rename_to}")
-
-
-def prepare_base_image_sources(
-    source_image: str, work_dir: str, sib_dirs: SourceImageBuildDirectories
-) -> bool:
-    log = logging.getLogger("source-build.base-image-sources")
-
-    base_image_sources_dir = create_dir(work_dir, "base_image_sources")
-    base_sources_extraction_dir = create_dir(base_image_sources_dir, "extraction_dir")
-
-    log.info("Copy source image %s into directory %s", source_image, base_sources_extraction_dir)
-    skopeo_copy(f"docker://{source_image}", f"dir:{base_sources_extraction_dir}")
-
-    # bsi reads source RPMs from this directory
-    bsi_rpms_dir = create_dir(base_image_sources_dir, "bsi_rpms_dir")
-    sib_dirs.rpm_dir = str(bsi_rpms_dir)  # save this directory for executing bsi
-
-    # bsi reads extra sources from this directory
-    # each source is in its own directory, for instance, subdir/source_a.tar.gz
-    extra_src_dir = create_dir(base_sources_extraction_dir, "extra_src_dir")
-
-    # extract layers, primarily they are RPMs
-    with open(f"{base_sources_extraction_dir}/manifest.json", "r") as f:
-        manifest_data = json.load(f)
-
-    gathered = False
-
-    for layer in manifest_data["layers"]:
-        digest = layer["digest"].split(":")[-1]
-        log.debug("untar layer %s", digest)
-
-        blob_member = ""
-        symlink_member = ""
-        with tarfile.open(f"{base_sources_extraction_dir}/{digest}", "r:gz") as tar:
-            for member in tar:
-                if member.isfile():
-                    blob_member = member.name
-                elif member.issym():
-                    symlink_member = member.name
-
-        if symlink_member.startswith("./rpm_dir/"):
-            dest_dir = sib_dirs.rpm_dir
-            log.debug("Prepare SRPM %s", symlink_member)
-
-            extract_blob_member(
-                digest,
-                blob_member,
-                dest_dir,
-                rename_to=os.path.basename(symlink_member),
-                work_dir=base_sources_extraction_dir,
-                log=log,
-            )
-
-            gathered = True
-
-        elif symlink_member.startswith("./extra_src_dir/"):
-            extra_src_archive = os.path.basename(symlink_member)
-            log.debug("Prepare extra source %s", extra_src_archive)
-            # one extra source archive per directory, no matter what the directory name is.
-            dest_dir = create_dir(extra_src_dir, extra_src_archive)
-            sib_dirs.extra_src_dirs.append(dest_dir)  # save this directory for bsi
-
-            extract_blob_member(
-                digest,
-                blob_member,
-                str(dest_dir),
-                rename_to=extra_src_archive,
-                work_dir=base_sources_extraction_dir,
-                log=log,
-            )
-
-            gathered = True
-
-            # FIXME: perhaps the dependency archive (the Cachi2) might be handled differently
-            run(["tar", "xvf", extra_src_archive], check=True, cwd=dest_dir)
-            os.unlink(f"{dest_dir}/{extra_src_archive}")
-
-        else:
-            log.warning("No known operation happened on layer %s", digest)
-
-    return gathered
 
 
 def gather_prefetched_sources(
@@ -359,6 +268,7 @@ def gather_prefetched_sources(
         shutil.copy(src, dest)
         sib_dirs.extra_src_dirs.append(f"{prepared_sources_dir}/{src_dir}")
 
+    sib_dirs.rpm_dir = create_dir(work_dir, "bsi_rpms_dir")
     srpm_counter = itertools.count()
     for root, filename in _find_prefetch_srpm_archives():
         next(srpm_counter)
@@ -442,7 +352,7 @@ def build_source_image_in_local(
 
     bsi_src_drivers = []
     bsi_cmd = [bsi_script, "-b", str(bsi_build_base_dir), "-o", str(image_output_dir)]
-    if sib_dirs.rpm_dir:
+    if sib_dirs.rpm_dir and len(os.listdir(sib_dirs.rpm_dir)) > 0:
         bsi_src_drivers.append(BSI_DRV_RPM_DIR)
         bsi_cmd.append("-s")
         bsi_cmd.append(str(sib_dirs.rpm_dir))
@@ -464,7 +374,7 @@ def build_source_image_in_local(
 def push_to_registry(image_build_output_dir: str, dest_images: list[str]) -> str:
     fd, digest_file = tempfile.mkstemp()
     os.close(fd)
-    src = f"oci://{image_build_output_dir}:latest-source"
+    src = f"oci:{image_build_output_dir}:latest-source"
     for dest_image in dest_images:
         logger.debug("push source image %r", dest_image)
         skopeo_copy(src, f"docker://{dest_image}", digest_file=digest_file)
@@ -528,6 +438,317 @@ def parse_image_name(image: str) -> tuple[str, str, str]:
     return name, tag, digest
 
 
+def download_parent_image_sources(source_image: str, work_dir: str) -> str:
+    """Download parent sources that stored in OCI image layout
+
+    :return: the directory holding the downloaded sources in the OCI image layout.
+    :rtype: str
+    """
+    sources_dir = create_dir(work_dir, "parent_image_sources")
+    logger.info("Copy source image %s into directory %s", source_image, sources_dir)
+    skopeo_copy(f"docker://{source_image}", f"oci:{sources_dir}", remove_signatures=True)
+    return sources_dir
+
+
+class DescriptorT(TypedDict):
+    mediaType: str
+    digest: str
+    size: int
+    annotations: NotRequired[dict[str, str]]
+
+
+class IndexT(TypedDict):
+    schemaVersion: int
+    manifests: list[DescriptorT]
+
+
+class HistoryT(TypedDict):
+    created: NotRequired[str]
+    created_by: NotRequired[str]
+
+
+class Blob:
+    """Represent a blob inside an OCI image layout
+
+    A blob object consists of a descriptor and the raw content read from the
+    underlying blob file within the OCI image directory. The descriptor describes
+    the type of the blob and is also used for pointing to the blob file storage
+    in file system.
+
+    This implementation so far supports two kinds of blobs, JSON blob and raw
+    blob. The former relates to the image config and manifest, and the latter
+    relates to the layers.
+    """
+
+    def __init__(self, layout: "OCIImage", descriptor: DescriptorT) -> None:
+        """Initialize this blob
+
+        :param layout: ``OCIImage``, the OCI image this blob belongs to.
+        :param descriptor: dict, the OCI Descriptor describing this blob.
+            The blob file is pointed out by the digest.
+        """
+        self._layout = layout
+        self._descriptor = descriptor
+
+        # Before accessing the raw content of a blob, this variable keeps None.
+        # The content is read only once.
+        self._raw_content: bytes | None = None
+
+    def __eq__(self, that: object) -> bool:
+        if not isinstance(that, self.__class__):
+            return False
+        this_d = self.descriptor
+        that_d = that.descriptor
+        return (
+            this_d["mediaType"] == that_d["mediaType"]
+            and this_d["digest"] == that_d["digest"]
+            and this_d["size"] == that_d["size"]
+            and this_d.get("annotations") == that_d.get("annotations")
+        )
+
+    @property
+    def path(self) -> Path:
+        return Path(self._layout.path, "blobs", *self._descriptor["digest"].split(":"))
+
+    @property
+    def descriptor(self) -> DescriptorT:
+        return self._descriptor
+
+    @property
+    def raw_content(self) -> bytes:
+        if self._raw_content is None:
+            self.read()
+        return self._raw_content  # type: ignore
+
+    @raw_content.setter
+    def raw_content(self, value: bytes) -> None:
+        """Return the raw content read from corresponding blob file"""
+        self._raw_content = value
+
+    def read(self) -> None:
+        """Read blob content from file"""
+        self._raw_content = self.path.read_bytes()
+
+    def delete(self) -> None:
+        """Delete this blob from filesystem"""
+        self.path.unlink()
+
+    @property
+    def to_python(self) -> bytes:
+        """Subclass overrides this to return a Python object in specific type
+
+        A blob can contain data in different types. This method converts the
+        raw content to the specific Python type for read and write.
+
+        :return: return the raw content by default.
+        :rtype: bytes
+        """
+        return self.raw_content
+
+    def save(self) -> "Blob":
+        """Save updates to storage
+
+        Subclass can override this method to provide custom save for specific
+        type of data.
+
+        :return: a new Blob object is returned to represent the written blob
+            file. The new blob descriptor is copied from the original one but
+            with updated digest and size. If nothing is changed to the content,
+            return this blob itself.
+        :rtype: Blob
+        """
+        if self._raw_content is None:
+            return self
+
+        checksum = hashlib.sha256(self._raw_content).hexdigest()
+        cur_checksum = self.descriptor["digest"].removeprefix("sha256:")
+        if cur_checksum == checksum:
+            return self
+
+        origin_d = self.descriptor
+        new_d: DescriptorT = {
+            "mediaType": origin_d["mediaType"],
+            "digest": f"sha256:{checksum}",
+            "size": 0,  # will be set later
+        }
+        if "annotations" in origin_d:
+            new_d["annotations"] = origin_d["annotations"]
+
+        new_blob = self.__class__(self._layout, new_d)
+        new_blob.path.write_bytes(self._raw_content)
+        new_blob.descriptor["size"] = new_blob.path.stat().st_size
+        return new_blob
+
+
+class Layer(Blob):
+    """Represent an image layer. Currently, no operation on the layers."""
+
+
+class JSONBlob(Blob):
+    """A blob whose content is encoded in JSON"""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._python_obj: dict | None = None
+
+    def save(self) -> Blob:
+        """Write JSON string in text mode"""
+        self.raw_content = json.dumps(self.to_python).encode("utf-8")
+        return super().save()
+
+    @property
+    def to_python(self) -> dict[str, Any]:
+        if self._python_obj is None:
+            self._python_obj = json.loads(super().raw_content)
+        return self._python_obj
+
+
+class Config(JSONBlob):
+    """Image config"""
+
+    @property
+    def history(self) -> list[HistoryT]:
+        """Return .history"""
+        return self.to_python["history"]
+
+    @property
+    def diff_ids(self) -> list[str]:
+        """Return .rootfs.diff_ids"""
+        return self.to_python["rootfs"]["diff_ids"]
+
+
+class Manifest(JSONBlob):
+    """Image manifest"""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._config: Config | None = None
+        self._layers: list[Layer] | None = None
+
+    @property
+    def config(self) -> Config:
+        if self._config is None:
+            self._config = Config(self._layout, self.to_python["config"])
+        return self._config
+
+    @property
+    def layers(self) -> list[Layer]:
+        if self._layers is None:
+            self._layers = [Layer(self._layout, d) for d in self.to_python["layers"]]
+        return self._layers
+
+    def append_layer(self, layer: Layer) -> None:
+        layers: list[DescriptorT] = self.to_python["layers"]
+        layers.append(layer.descriptor)
+
+    def save(self) -> Blob:
+        """Save this manifest"""
+        new_config = self.config.save()
+        if new_config != self.config:
+            self.to_python["config"] = new_config.descriptor
+        layer_descriptors = self.to_python["layers"]
+        for idx, layer in enumerate(self.layers):
+            if not layer.path.exists():
+                raise ValueError(f"layer {str(layer.path)} does not exist.")
+            new_layer = layer.save()
+            if new_layer != layer:
+                layer_descriptors[idx] = new_layer.descriptor
+                layer.delete()
+        return super().save()
+
+
+class Index:
+    """Represent the index.json of an OCI image"""
+
+    def __init__(self, layout: "OCIImage"):
+        self._layout = layout
+        self._content: IndexT | None = None
+        self._manifests: list[Manifest] | None = None
+
+    @property
+    def path(self) -> Path:
+        return self._layout.path / "index.json"
+
+    @property
+    def content(self) -> IndexT:
+        if self._content is None:
+            self._content = json.loads(self.path.read_text())
+        return self._content
+
+    def manifests(self) -> list[Manifest]:
+        """Return .manifests as a list of Manifest objects"""
+        if not self._manifests:
+            self._manifests = [Manifest(self._layout, d) for d in self.content["manifests"]]
+        return self._manifests
+
+    def save(self) -> None:
+        """Save this index"""
+        updated = False
+        for idx, manifest in enumerate(self.manifests()):
+            new_manifest = manifest.save()
+            if new_manifest != manifest:
+                self.content["manifests"][idx] = new_manifest.descriptor
+                updated = True
+        if updated:
+            self._manifests = None
+            self.path.write_text(json.dumps(self.content))
+
+
+class OCIImage:
+    """Represent an OCI image"""
+
+    def __init__(self, path: str | os.PathLike):
+        """Initialize this OCI image object
+
+        :param path: a path to an OCI image.
+        """
+        self._path = Path(path)
+        self._index: Index | None = None
+
+    @property
+    def path(self) -> Path:
+        return self._path
+
+    @property
+    def index(self) -> Index:
+        if self._index is None:
+            self._index = Index(self)
+        return self._index
+
+
+def merge_image(from_image: str, to_image: str) -> None:
+    """Merge sources from one to another
+
+    Image layers are appended to the destination image one by one.
+
+    :param from_image: str, merge sources from this image to another.
+    :param to_image: str, sources are merged into this image. Both of
+        ``from_image`` and ``to_image`` are directory paths holding sources in
+        OCI image layout format.
+    """
+
+    parent_image = OCIImage(from_image)
+    local_build = OCIImage(to_image)
+
+    parent_image_manifest = parent_image.index.manifests()[0]
+    local_build_manifest = local_build.index.manifests()[0]
+    for layer in parent_image_manifest.layers:
+        copy_dest_path = Path(local_build.path, "blobs", *layer.descriptor["digest"].split(":"))
+        shutil.copyfile(layer.path, copy_dest_path)
+        logger.debug("copy layer %s to %s", layer.path, copy_dest_path)
+        local_build_manifest.append_layer(layer)
+
+    parent_image_config = parent_image_manifest.config
+    local_build_config = local_build_manifest.config
+
+    local_build_config.diff_ids.extend(parent_image_config.diff_ids)
+    logger.debug("append diff_ids:\n%s", parent_image_config.diff_ids)
+    local_build_config.history.extend(parent_image_config.history)
+    logger.debug("append history:\n%s", parent_image_config.history)
+
+    local_build.index.save()
+
+
 def build(args) -> BuildResult:
     build_result: BuildResult = {
         "status": "success",
@@ -551,7 +772,7 @@ def build(args) -> BuildResult:
 
     make_source_archive(work_dir, args.source_dir, sib_dirs)
 
-    # Handle base image sources
+    parent_sources_dir = ""
     if args.base_images:
         base_images: list[str] = args.base_images.splitlines()
         if len(base_images) > 1:
@@ -562,8 +783,7 @@ def build(args) -> BuildResult:
         if allowed:
             source_image = resolve_source_image_by_version_release(base_image)
             if source_image:
-                prepared = prepare_base_image_sources(source_image, work_dir, sib_dirs)
-                build_result["base_image_source_included"] = prepared
+                parent_sources_dir = download_parent_image_sources(source_image, work_dir)
             else:
                 logger.warning("Registry does not have source image %s", source_image)
         else:
@@ -587,6 +807,9 @@ def build(args) -> BuildResult:
     build_result["image_url"] = dest_images[-1]
 
     image_output_dir = build_source_image_in_local(args.bsi, work_dir, sib_dirs)
+    if parent_sources_dir:
+        merge_image(parent_sources_dir, image_output_dir)
+        build_result["base_image_source_included"] = True
     image_digest = push_to_registry(image_output_dir, dest_images)
     build_result["image_digest"] = image_digest
     return build_result

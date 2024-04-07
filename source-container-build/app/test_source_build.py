@@ -1,4 +1,5 @@
 import argparse
+import hashlib
 import logging
 import os
 import os.path
@@ -9,16 +10,26 @@ import tarfile
 import json
 import unittest
 import zipfile
-from unittest.mock import call, patch, MagicMock, Mock
-from typing import Final
+from unittest.mock import patch, MagicMock, Mock
+from typing import Final, Literal, TypedDict
 from subprocess import CalledProcessError
 from dataclasses import dataclass
 from tempfile import mkdtemp, mkstemp
+from pathlib import Path
 
 import source_build
-from source_build import BuildResult, SourceImageBuildDirectories
+from source_build import BuildResult, DescriptorT, SourceImageBuildDirectories
 
 import pytest
+
+BlobTypeString = Literal["config", "manifest", "layer"]
+
+
+class ManifestT(TypedDict):
+    schemaVersion: int
+    config: DescriptorT
+    layers: list[DescriptorT]
+
 
 FAKE_BSI: Final = "/testing/bsi"
 OUTPUT_BINARY_IMAGE: Final = "registry/ns/app:v1"
@@ -108,6 +119,7 @@ def create_skopeo_cli_parser() -> argparse.ArgumentParser:
     copy_parser = subparsers.add_parser("copy")
     copy_parser.add_argument("--digestfile", dest="digest_file")
     copy_parser.add_argument("--retry-times")
+    copy_parser.add_argument("--remove-signatures", action="store_true")
     copy_parser.add_argument("src")
     copy_parser.add_argument("dest")
     return parser
@@ -150,77 +162,87 @@ def create_fake_dep_packages_with_content(cachi2_output_dir: str, deps: dict[str
                 f.write(content)
 
 
-class TestExtractBlobMember(unittest.TestCase):
-    """Test extract_blob_member method"""
+def create_blob(root_dir: str, data: list[bytes], type_: BlobTypeString) -> DescriptorT:
+    if type_ == "config":
+        media_type = "application/vnd.oci.image.config.v1+json"
+    elif type_ == "manifest":
+        media_type = "application/vnd.oci.image.manifest.v1+json"
+    elif type_ == "layer":
+        media_type = "application/vnd.oci.image.layer.v1.tar+gzip"
+    else:
+        raise ValueError(f"Unknown type: {type_}")
 
-    tar_archive = ""
-    data_file = ""
-    file_content: Final = b"hello source build"
+    blob_dir = Path(root_dir, "blobs", "sha256")
+    blob_dir.mkdir(parents=True, exist_ok=True)
 
-    @classmethod
-    def setUpClass(cls) -> None:
-        fd, cls.data_file = mkstemp("-data-file")
-        os.write(fd, cls.file_content)
-        os.close(fd)
+    # Create a temporary blob file firstly, then rename it after checksum is calculated.
+    blob_file = Path(root_dir, "blobs", "sha256", "temp_blob_file")
+    if media_type.endswith("+json"):
+        blob_file.write_bytes(data[0])
+    else:
+        temp_data_files: list[str] = []
+        with tarfile.open(blob_file, "w:gz") as tar:
+            for item in data:
+                fd, temp_data_file = mkstemp(dir=blob_dir, prefix="temp-data-file-")
+                os.write(fd, item)
+                os.close(fd)
+                temp_data_files.append(temp_data_file)
+                tar.add(temp_data_file, arcname=os.path.basename(temp_data_file))
+        for item in temp_data_files:
+            os.unlink(item)
 
-        fd, cls.tar_archive = mkstemp(suffix="-tar-archive")
-        os.close(fd)
-        with tarfile.open(cls.tar_archive, "w:gz") as tar:
-            tar.add(cls.data_file, arcname="./blobs/sha256/hash_file")
+    with blob_file.open("rb") as f:
+        checksum = hashlib.sha256(f.read()).hexdigest()
 
-    @classmethod
-    def tearDownClass(cls) -> None:
-        os.unlink(cls.data_file)
-        os.unlink(cls.tar_archive)
+    blob_file = blob_file.rename(blob_dir.joinpath(checksum))
 
-    def setUp(self) -> None:
-        self.work_dir = mkdtemp()
-        self.dest_dir = mkdtemp()
-        self.logger = logging.getLogger("test")
+    return {
+        "mediaType": media_type,
+        "digest": "sha256:" + checksum,
+        "size": blob_file.stat().st_size,
+    }
 
-    def tearDown(self) -> None:
-        shutil.rmtree(self.work_dir)
-        shutil.rmtree(self.dest_dir)
 
-    def test_extract_blob_member(self):
-        member = "./blobs/sha256/hash_file"
-        source_build.extract_blob_member(
-            self.tar_archive,
-            member,
-            self.dest_dir,
-            "my-data-file",
-            self.work_dir,
-            self.logger,
-        )
+def create_local_oci_image(path: str, layers_data: list[list[bytes]]) -> None:
+    """Create an OCI image for mocking downloading a source image
 
-        extracted_file = os.path.join(self.dest_dir, "my-data-file")
-        self.assertTrue(os.path.exists(extracted_file))
-        with open(extracted_file, "rb") as f:
-            self.assertEqual(self.file_content, f.read())
+    :param path: str, create OCI image under this directory.
+    :param layers_data: layers data to customize the tar archive per layer.
+        Each ``list[bytes]`` is per layer, and each ``bytes`` is per file included
+        in a tar archive.
+    :type layers_data: list[list[bytes]]
+    """
+    config = {
+        "config": {},
+        "rootfs": {
+            "type": "layers",
+            "diff_ids": ["sha256:d3ad52c", "sha256:e33845d"],
+        },
+        "history": [
+            {
+                "created": "2024-04-01T22:12:59.981978181+08:00",
+                "created_by": "#(nop) test adding artifact: e3b0c44",
+            },
+            {
+                "created": "2024-04-01T12:01:35.616350493+08:00",
+                "created_by": "#(nop) test adding artifact: aff9acf",
+            },
+        ],
+    }
+    config_descriptor = create_blob(path, [json.dumps(config).encode("utf-8")], "config")
 
-    def test_raise_error_if_extract_with_unknown_member(self):
-        member = "hash_file"
-        with self.assertRaises(CalledProcessError):
-            source_build.extract_blob_member(
-                self.tar_archive,
-                member,
-                self.dest_dir,
-                "my-data-file",
-                self.work_dir,
-                self.logger,
-            )
+    manifest: ManifestT = {
+        "schemaVersion": 2,
+        "config": config_descriptor,
+        "layers": [create_blob(path, data, "layer") for data in layers_data],
+    }
+    manifest_descriptor = create_blob(path, [json.dumps(manifest).encode("utf-8")], "manifest")
 
-    def test_subprocess_should_raise_error(self):
-        tar_archive = "/not/exist"  # make the call fail
-        with self.assertRaises(CalledProcessError):
-            source_build.extract_blob_member(
-                tar_archive,
-                "/member",
-                "/path/to/dest",
-                "new name",
-                self.work_dir,
-                self.logger,
-            )
+    index_json = {
+        "schemaVersion": 2,
+        "manifests": [manifest_descriptor],
+    }
+    Path(path, "index.json").write_text(json.dumps(index_json))
 
 
 class TestGetRepoInfo(unittest.TestCase):
@@ -329,6 +351,9 @@ class TestBuildSourceInLocal(unittest.TestCase):
     def test_build_with_all_kind_of_sources(self, run: MagicMock):
         # Compose SRPMs and extra sources
         self.sib_dirs.rpm_dir = mkdtemp()
+        fd, _ = mkstemp(dir=self.sib_dirs.rpm_dir, suffix=".src.rpm")
+        os.close(fd)
+
         extra_src_dir0 = mkdtemp()
         self.sib_dirs.extra_src_dirs.append(extra_src_dir0)
 
@@ -348,6 +373,8 @@ class TestBuildSourceInLocal(unittest.TestCase):
     @patch("source_build.run")
     def test_build_with_srpms_only(self, run: MagicMock):
         self.sib_dirs.rpm_dir = mkdtemp()
+        fd, _ = mkstemp(dir=self.sib_dirs.rpm_dir, suffix=".src.rpm")
+        os.close(fd)
         # extra_src_dirs is empty, which indicates that no extra source will be composed.
 
         source_build.build_source_image_in_local(FAKE_BSI, self.work_dir, self.sib_dirs)
@@ -416,7 +443,7 @@ class TestPushToRegistry(unittest.TestCase):
         for run_call, dest_image in zip(run.mock_calls, dest_images):
             skopeo_cmd = run_call.args[0]
             args = self._parse_skopeo_copy_cmd(skopeo_cmd[1:])
-            self.assertEqual("oci:///path/to/image_output:latest-source", args.src)
+            self.assertEqual("oci:/path/to/image_output:latest-source", args.src)
             self.assertEqual(f"docker://{dest_image}", args.dest)
 
     def _skopeo_copy_run(self, cmd, **kwargs) -> None:
@@ -440,211 +467,6 @@ class TestPushToRegistry(unittest.TestCase):
         dest_images = [self.DEST_IMAGE, self.DEST_IMAGE + ".src"]
         source_build.push_to_registry("/path/to/image_output", dest_images)
         self._assert_skopeo_copy(run, dest_images)
-
-
-class TestPrepareBaseImageSources(unittest.TestCase):
-    PARENT_IMAGE: Final = "registry.access.redhat.com/org/app:9.3-1234"
-
-    def setUp(self) -> None:
-        self.work_dir = mkdtemp()
-
-    def tearDown(self) -> None:
-        shutil.rmtree(self.work_dir)
-
-    @patch("source_build.run")
-    def test_nothing_is_gathered_if_parent_image_source_is_empty(self, run):
-        def run_side_effect(cmd, **kwargs):
-            skopeo_cmd = cmd[:2]
-
-            if skopeo_cmd == ["skopeo", "copy"]:
-                # Write manifest.json to test the empty image (empty layers)
-                # drop the protocol part: dir
-                _, dest_dir = cmd[-1].split(":")
-                with open(os.path.join(dest_dir, "manifest.json"), "w") as f:
-                    json.dump(
-                        {
-                            "schemaVersion": 2,
-                            "config": {
-                                "mediaType": "application/vnd.oci.image.config.v1+json",
-                                "digest": "sha256:626ca1c",
-                                "size": 139,
-                            },
-                            "layers": [],
-                        },
-                        f,
-                    )
-
-        run.side_effect = run_side_effect
-        sib_dirs = SourceImageBuildDirectories()
-
-        result = source_build.prepare_base_image_sources(self.PARENT_IMAGE, self.work_dir, sib_dirs)
-        self.assertFalse(result)
-
-    @patch("source_build.run")
-    @patch("tarfile.open")
-    def test_layer_does_not_include_expected_content(self, tarfile_open, run):
-        """
-        Each layer (the tarball) generated by bsi has specific directory structure.
-        This test ensures an exception does not break anything.
-        The method logs something then skip it.
-        """
-
-        # Members' name that don't have expected layout of bsi directory structure
-        member1 = Mock()
-        member1.name = "member_1"
-        member1.isfile.return_value = True
-        member1.issym.return_value = False
-        member2 = Mock()
-        member2.name = "member_2"
-        member2.isfile.return_value = False
-        member2.issym.return_value = True
-
-        mock_tar = Mock()
-        mock_tar.__iter__ = Mock(return_value=iter([member1, member2]))
-
-        # Mock tarfile context manager
-        tarfile_open.return_value.__enter__.return_value = mock_tar
-
-        def run_side_effect(cmd, **kwargs):
-            skopeo_cmd = cmd[:2]
-
-            if skopeo_cmd == ["skopeo", "copy"]:
-                manifest = {
-                    "schemaVersion": 2,
-                    "config": {
-                        "mediaType": "application/vnd.oci.image.config.v1+json",
-                        "digest": "sha256:626ca1c",
-                        "size": 139,
-                    },
-                    "layers": [
-                        {
-                            "mediaType": "application/vnd.docker.image.rootfs.diff.tar.gzip",
-                            "size": 123,
-                            "digest": "sha256:e53f59cdb1f",
-                        }
-                    ],
-                }
-                _, dest_dir = cmd[-1].split(":")
-                with open(os.path.join(dest_dir, "manifest.json"), "w") as f:
-                    json.dump(manifest, f)
-
-        run.side_effect = run_side_effect
-        sib_dirs = SourceImageBuildDirectories()
-
-        with self.assertLogs("source-build") as logs:
-            self.assertFalse(
-                source_build.prepare_base_image_sources(self.PARENT_IMAGE, self.work_dir, sib_dirs)
-            )
-
-        logs_content = "\n".join(logs.output)
-        self.assertEqual(1, logs_content.count("No known operation happened on layer e53f59cdb1f"))
-
-    @patch("source_build.run")
-    @patch("source_build.extract_blob_member")
-    @patch("tarfile.open")
-    @patch("os.unlink")
-    def test_prepare_srpm_and_extra_sources(self, unlink, tarfile_open, extract_blob_member, run):
-        srpm_blob_member = Mock()
-        srpm_blob_member.name = "./blobs/sha256/cc4ae6a"
-        srpm_blob_member.isfile.return_value = True
-        srpm_blob_member.issym.return_value = False
-        srpm_symlink_member = Mock()
-        srpm_symlink_member.name = "./rpm_dir/gdb-7.6.1-100.el7.src.rpm"
-        srpm_symlink_member.isfile.return_value = False
-        srpm_symlink_member.issym.return_value = True
-
-        mock_tar = Mock()
-        mock_tar.__iter__ = Mock(return_value=iter([srpm_blob_member, srpm_symlink_member]))
-
-        # Mock tarfile context manager
-        tarfile_open_layer_1 = MagicMock()
-        tarfile_open_layer_1.__enter__.return_value = mock_tar
-
-        extra_src_blob_member = Mock()
-        extra_src_blob_member.name = "./blobs/sha256/cb0a4c2"
-        extra_src_blob_member.isfile.return_value = True
-        extra_src_blob_member.issym.return_value = False
-        extra_src_symlink_member = Mock()
-        extra_src_symlink_member.name = "./extra_src_dir/extra-src-0.tar"
-        extra_src_symlink_member.isfile.return_value = False
-        extra_src_symlink_member.issym.return_value = True
-
-        mock_tar = Mock()
-        mock_tar.__iter__ = Mock(
-            return_value=iter([extra_src_blob_member, extra_src_symlink_member])
-        )
-
-        # Mock tarfile context manager
-        tarfile_open_layer_2 = MagicMock()
-        tarfile_open_layer_2.__enter__.return_value = mock_tar
-
-        tarfile_open.side_effect = [tarfile_open_layer_1, tarfile_open_layer_2]
-
-        def run_side_effect(cmd, **kwargs):
-            skopeo_cmd = cmd[:2]
-
-            if skopeo_cmd == ["skopeo", "copy"]:
-                # let_it_gather_parent_image_sources(dest_dir, tarfile_open)
-                manifest = {
-                    "schemaVersion": 2,
-                    "config": {
-                        "mediaType": "application/vnd.oci.image.config.v1+json",
-                        "digest": "sha256:626ca1c",
-                        "size": 139,
-                    },
-                    "layers": [
-                        {
-                            "mediaType": "application/vnd.docker.image.rootfs.diff.tar.gzip",
-                            "size": 123,
-                            "digest": "sha256:e53f59cdb1f",
-                        },
-                        {
-                            "mediaType": "application/vnd.docker.image.rootfs.diff.tar.gzip",
-                            "size": 456,
-                            "digest": "sha256:d1a1af5ed0ce",
-                        },
-                    ],
-                }
-                _, dest_dir = cmd[-1].split(":")
-                with open(os.path.join(dest_dir, "manifest.json"), "w") as f:
-                    json.dump(manifest, f)
-
-        run.side_effect = run_side_effect
-        sib_dirs = SourceImageBuildDirectories()
-
-        result = source_build.prepare_base_image_sources(self.PARENT_IMAGE, self.work_dir, sib_dirs)
-        self.assertTrue(result)
-
-        # The original extra-src-N.tar file should be removed
-        unlink.assert_called_once()
-        removed_extra_src_archive = unlink.mock_calls[0].args[0]
-        self.assertEqual("extra-src-0.tar", os.path.basename(removed_extra_src_archive))
-
-        extraction_dir = os.path.join(self.work_dir, "base_image_sources", "extraction_dir")
-        used_log = logging.getLogger("source-build.base-image-sources")
-
-        extract_srpm_call = call(
-            "e53f59cdb1f",
-            srpm_blob_member.name,
-            sib_dirs.rpm_dir,
-            rename_to=os.path.basename(srpm_symlink_member.name),
-            work_dir=extraction_dir,
-            log=used_log,
-        )
-
-        extra_src_dest_dir = os.path.join(
-            extraction_dir, "extra_src_dir", os.path.basename(extra_src_symlink_member.name)
-        )
-        extract_extra_src_call = call(
-            "d1a1af5ed0ce",
-            extra_src_blob_member.name,
-            extra_src_dest_dir,
-            rename_to=os.path.basename(extra_src_symlink_member.name),
-            work_dir=extraction_dir,
-            log=used_log,
-        )
-
-        extract_blob_member.assert_has_calls([extract_srpm_call, extract_extra_src_call])
 
 
 class TestGatherPrefetchedSources(unittest.TestCase):
@@ -935,10 +757,47 @@ class TestBuildProcess(unittest.TestCase):
         self.assertEqual("failure", build_result["status"])
         self.assertRegex(build_result["message"], r"Command .+git.+ 128")
 
+    def _assert_all_sources_are_merged(self, src: str, dest: str) -> None:
+        """Check if all sources are merged from one image into another
+
+        There are four check points:
+        * Config ``.history``
+        * Config ``.rootfs.diff_ids``
+        * Manifest ``.layers``
+        * Layer blobs are inside the ``dest`` image
+
+        :param src: str, directory path to an OCI image, whose sources are merged into the
+            ``dest`` image.
+        :param dest: str, directory path to an OCI image, into where the sources are merged.
+        """
+        source_image = source_build.OCIImage(src)
+        dest_image = source_build.OCIImage(dest)
+
+        source_manifest = source_image.index.manifests()[0]
+        source_config = source_manifest.config
+        dest_manifest = dest_image.index.manifests()[0]
+        dest_config = dest_manifest.config
+
+        check_set = set(source_config.diff_ids) & set(dest_config.diff_ids)
+        self.assertListEqual(sorted(check_set), sorted(source_config.diff_ids))
+
+        source_history_created_by = set(history["created_by"] for history in source_config.history)
+        dest_history_created_by = set(history["created_by"] for history in dest_config.history)
+        check_set = source_history_created_by & dest_history_created_by
+        self.assertListEqual(sorted(check_set), sorted(source_history_created_by))
+
+        source_layers_digest = set(layer.descriptor["digest"] for layer in source_manifest.layers)
+        dest_layers_digest = set(layer.descriptor["digest"] for layer in dest_manifest.layers)
+        check_set = source_layers_digest & dest_layers_digest
+        self.assertListEqual(sorted(check_set), sorted(source_layers_digest))
+
+        for digest in source_layers_digest:
+            dest_blob = Path(dest_image.path, "blobs", *digest.split(":"))
+            self.assertTrue(dest_blob.exists())
+
     def _test_include_sources(
         self,
         include_prefetched_sources: bool = False,
-        mock_tarfile_open: MagicMock = None,
         parent_images: str = "",
         expect_parent_image_sources_included: bool = False,
         mock_nonexisting_source_image: bool = False,
@@ -997,53 +856,24 @@ class TestBuildProcess(unittest.TestCase):
 
             if run_cmd == ["skopeo", "copy"]:
                 args = create_skopeo_cli_parser().parse_args(cmd[1:])
+
                 if args.digest_file:
                     # copy for pushing the source image to registry
                     with open(args.digest_file, "w") as f:
                         f.write(self.FAKE_IMAGE_DIGEST)
-
                     pushed_images.append(args.dest.removeprefix("docker://"))
-                else:
-                    # copy for download parent image sources
-                    # to simulate the download, write manifest.json and mock the tarfile.open
-                    manifest = {
-                        "schemaVersion": 2,
-                        "config": {
-                            "mediaType": "application/vnd.oci.image.config.v1+json",
-                            "digest": "sha256:626ca1c",
-                            "size": 139,
-                        },
-                        "layers": [
-                            {
-                                "mediaType": "application/vnd.docker.image.rootfs.diff.tar.gzip",
-                                "size": 123,
-                                "digest": "sha256:e53f59cdb1f",  # map to the following mock tar
-                            },
-                        ],
-                    }
-                    _, image_download_dir = args.dest.split(":")
-                    with open(os.path.join(image_download_dir, "manifest.json"), "w") as f:
-                        json.dump(manifest, f)
+                    return
 
-                    srpm_blob_member = Mock()
-                    srpm_blob_member.name = "./blobs/sha256/cc4ae6a"
-                    srpm_blob_member.isfile.return_value = True
-                    srpm_blob_member.issym.return_value = False
-                    srpm_symlink_member = Mock()
-                    srpm_symlink_member.name = "./rpm_dir/gdb-7.6.1-100.el7.src.rpm"
-                    srpm_symlink_member.isfile.return_value = False
-                    srpm_symlink_member.issym.return_value = True
-
-                    mock_tar = Mock()
-                    mock_tar.__iter__ = Mock(
-                        return_value=iter([srpm_blob_member, srpm_symlink_member])
+                # copy for downloading parent sources container
+                if args.remove_signatures:
+                    self.assertTrue(
+                        args.dest.startswith("oci:"),
+                        "oci: transport is not used for downloading parent sources",
                     )
-
-                    # Mock tarfile context manager
-                    tarfile_open_layer = MagicMock()
-                    tarfile_open_layer.__enter__.return_value = mock_tar
-
-                    mock_tarfile_open.side_effect = [tarfile_open_layer]
+                    image_download_dir = args.dest.removeprefix("oci:")
+                    create_local_oci_image(
+                        image_download_dir, [[b"data 1"], [b"data 2", b"data 3"]]
+                    )
 
                 return
 
@@ -1064,9 +894,8 @@ class TestBuildProcess(unittest.TestCase):
                     else:
                         self.fail(f"Expected pip dependency {self.PIP_PKG} is not included.")
 
-                if expect_parent_image_sources_included:
-                    self.assertIsNotNone(parser.srpms_dir)
-                    self.assertTrue(os.path.exists(parser.srpms_dir))
+                # Write an OCI image as the result of bsi execution.
+                create_local_oci_image(parser.output_path, [[b"app source code"]])
 
         cli_cmd = [
             "source_build.py",
@@ -1096,6 +925,23 @@ class TestBuildProcess(unittest.TestCase):
                 mock_run.side_effect = run_side_effect
                 rc = source_build.main()
 
+        if expect_parent_image_sources_included:
+            # Check if parent sources are merged into the local source build
+            parent_sources_dir = ""
+            local_source_build_dir = ""
+            for run_call in mock_run.mock_calls:
+                cmd = run_call.args[0]
+                if cmd[0] == self.bsi:
+                    args = create_bsi_cli_parser().parse_args(cmd[1:])
+                    local_source_build_dir = args.output_path
+                elif cmd[:2] == ["skopeo", "copy"]:
+                    args = create_skopeo_cli_parser().parse_args(cmd[1:])
+                    if args.remove_signatures:
+                        parent_sources_dir = args.dest.removeprefix("oci:")
+            self.assertTrue(os.path.isdir(parent_sources_dir))
+            self.assertTrue(os.path.isdir(local_source_build_dir))
+            self._assert_all_sources_are_merged(parent_sources_dir, local_source_build_dir)
+
         self.assertEqual(0, rc)
 
         build_result: BuildResult
@@ -1120,7 +966,6 @@ class TestBuildProcess(unittest.TestCase):
 
         self.assertListEqual([f"{OUTPUT_BINARY_IMAGE}.src", expected_source_image], pushed_images)
 
-    # @patch("source_build.run")
     def test_just_include_app_source(self):
         self._test_include_sources()
 
@@ -1128,55 +973,38 @@ class TestBuildProcess(unittest.TestCase):
         """Include prefetched pip dependencies"""
         self._test_include_sources(include_prefetched_sources=True)
 
-    @patch("source_build.extract_blob_member")
-    @patch("tarfile.open")
-    def test_include_parent_image_sources(self, tarfile_open, extract_blob_member):
+    def test_include_parent_image_sources(self):
         """
         Include sources from parent image. Like another test for gathering sources from parent
         image, go through the layers, but do not do real extraction from a tarball.
         """
         self._test_include_sources(
-            mock_tarfile_open=tarfile_open,
             parent_images="\ngolang:2\n\nregistry.access.example.com/ubi9/ubi:9.3-1\n",
             expect_parent_image_sources_included=True,
         )
 
-    @patch("source_build.extract_blob_member")
-    @patch("tarfile.open")
-    def test_include_parent_image_sources_2(self, tarfile_open, extract_blob_member):
+    def test_include_parent_image_sources_2(self):
         self._test_include_sources(
-            mock_tarfile_open=tarfile_open,
             parent_images="\ngolang:2\n\nregistry.access.example.com/ubi9/ubi:9.3-1@sha256:123\n",
             expect_parent_image_sources_included=True,
         )
 
-    @patch("source_build.extract_blob_member")
-    @patch("tarfile.open")
-    def test_registry_does_not_have_source_image(self, tarfile_open, extract_blob_member):
+    def test_registry_does_not_have_source_image(self):
         self._test_include_sources(
-            mock_tarfile_open=tarfile_open,
             parent_images="\ngolang:2\n\nregistry.access.example.com/ubi9/ubi:9.3-1@sha256:123\n",
             expect_parent_image_sources_included=False,
             mock_nonexisting_source_image=True,
         )
 
-    @patch("source_build.extract_blob_member")
-    @patch("tarfile.open")
-    def test_include_all_kinds_of_sources(self, tarfile_open, extract_blob_member):
+    def test_include_all_kinds_of_sources(self):
         self._test_include_sources(
             include_prefetched_sources=True,
-            mock_tarfile_open=tarfile_open,
             parent_images="\ngolang:2\n\nregistry.access.example.com/ubi9/ubi:9.3-1@sha256:123\n",
             expect_parent_image_sources_included=True,
         )
 
-    @patch("source_build.extract_blob_member")
-    @patch("tarfile.open")
-    def test_not_include_parent_image_sources_from_disallowed_registry(
-        self, tarfile_open, extract_blob_member
-    ):
+    def test_not_include_parent_image_sources_from_disallowed_registry(self):
         self._test_include_sources(
-            mock_tarfile_open=tarfile_open,
             parent_images=f"\ngolang:2\n\n{DISALLOWED_REGISTRY}/ubi9/ubi:9.3-1@sha256:123\n",
             expect_parent_image_sources_included=False,
         )
