@@ -778,20 +778,18 @@ class TestBuildProcess(unittest.TestCase):
         dest_manifest = dest_image.index.manifests()[0]
         dest_config = dest_manifest.config
 
-        check_set = set(source_config.diff_ids) & set(dest_config.diff_ids)
-        self.assertListEqual(sorted(check_set), sorted(source_config.diff_ids))
+        n = len(source_config.diff_ids)
+        self.assertListEqual(dest_config.diff_ids[0:n], source_config.diff_ids)
 
-        source_history_created_by = set(history["created_by"] for history in source_config.history)
-        dest_history_created_by = set(history["created_by"] for history in dest_config.history)
-        check_set = source_history_created_by & dest_history_created_by
-        self.assertListEqual(sorted(check_set), sorted(source_history_created_by))
+        n = len(source_config.history)
+        self.assertListEqual(dest_config.history[0:n], source_config.history)
 
-        source_layers_digest = set(layer.descriptor["digest"] for layer in source_manifest.layers)
-        dest_layers_digest = set(layer.descriptor["digest"] for layer in dest_manifest.layers)
-        check_set = source_layers_digest & dest_layers_digest
-        self.assertListEqual(sorted(check_set), sorted(source_layers_digest))
+        n = len(source_manifest.layers)
+        self.assertListEqual(dest_manifest.layers[0:n], source_manifest.layers)
 
-        for digest in source_layers_digest:
+        # Ensure the blob files are copied to the destination image layout
+        for layer in source_manifest.layers:
+            digest = layer.descriptor["digest"]
             dest_blob = Path(dest_image.path, "blobs", *digest.split(":"))
             self.assertTrue(dest_blob.exists())
 

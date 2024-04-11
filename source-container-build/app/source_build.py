@@ -631,9 +631,9 @@ class Manifest(JSONBlob):
             self._layers = [Layer(self._layout, d) for d in self.to_python["layers"]]
         return self._layers
 
-    def append_layer(self, layer: Layer) -> None:
+    def prepend_layer(self, layer: Layer) -> None:
         layers: list[DescriptorT] = self.to_python["layers"]
-        layers.append(layer.descriptor)
+        layers.insert(0, layer.descriptor)
 
     def save(self) -> Blob:
         """Save this manifest"""
@@ -710,35 +710,43 @@ class OCIImage:
         return self._index
 
 
-def merge_image(from_image: str, to_image: str) -> None:
-    """Merge sources from one to another
+def merge_image(parent_sources_dir: str, local_source_build: str) -> None:
+    """Merge parent sources into the local source build
 
-    Image layers are appended to the destination image one by one.
+    Layers and associated data are prepended into the local source build and
+    kept the same order as in the parent source container.
 
-    :param from_image: str, merge sources from this image to another.
-    :param to_image: str, sources are merged into this image. Both of
-        ``from_image`` and ``to_image`` are directory paths holding sources in
-        OCI image layout format.
+    :param parent_sources_dir: str, merge sources from this image to another.
+    :param local_source_build: str, sources are merged into this image. Both of
+        ``parent_sources_dir`` and ``local_source_build`` are directory paths
+        holding sources in OCI image layout format.
     """
 
-    parent_image = OCIImage(from_image)
-    local_build = OCIImage(to_image)
+    parent_image = OCIImage(parent_sources_dir)
+    local_build = OCIImage(local_source_build)
 
     parent_image_manifest = parent_image.index.manifests()[0]
     local_build_manifest = local_build.index.manifests()[0]
-    for layer in parent_image_manifest.layers:
+    for layer in reversed(parent_image_manifest.layers):
         copy_dest_path = Path(local_build.path, "blobs", *layer.descriptor["digest"].split(":"))
         shutil.copyfile(layer.path, copy_dest_path)
         logger.debug("copy layer %s to %s", layer.path, copy_dest_path)
-        local_build_manifest.append_layer(layer)
+        local_build_manifest.prepend_layer(layer)
 
     parent_image_config = parent_image_manifest.config
     local_build_config = local_build_manifest.config
 
-    local_build_config.diff_ids.extend(parent_image_config.diff_ids)
-    logger.debug("append diff_ids:\n%s", parent_image_config.diff_ids)
-    local_build_config.history.extend(parent_image_config.history)
-    logger.debug("append history:\n%s", parent_image_config.history)
+    for diff_id in reversed(parent_image_config.diff_ids):
+        local_build_config.diff_ids.insert(0, diff_id)
+
+    n = len(parent_image_config.diff_ids)
+    logger.debug("write diff_ids into local source build:\n%r", local_build_config.diff_ids[0:n])
+
+    for history in reversed(parent_image_config.history):
+        local_build_config.history.insert(0, history)
+
+    n = len(parent_image_config.history)
+    logger.debug("write history into local source build:\n%r", local_build_config.history[0:n])
 
     local_build.index.save()
 
