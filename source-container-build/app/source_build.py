@@ -446,6 +446,7 @@ def download_parent_image_sources(source_image: str, work_dir: str) -> str:
     """
     sources_dir = create_dir(work_dir, "parent_image_sources")
     logger.info("Copy source image %s into directory %s", source_image, sources_dir)
+    # skopeo can not copy signatures to oci image layout
     skopeo_copy(f"docker://{source_image}", f"oci:{sources_dir}", remove_signatures=True)
     return sources_dir
 
@@ -497,14 +498,7 @@ class Blob:
     def __eq__(self, that: object) -> bool:
         if not isinstance(that, self.__class__):
             return False
-        this_d = self.descriptor
-        that_d = that.descriptor
-        return (
-            this_d["mediaType"] == that_d["mediaType"]
-            and this_d["digest"] == that_d["digest"]
-            and this_d["size"] == that_d["size"]
-            and this_d.get("annotations") == that_d.get("annotations")
-        )
+        return self.descriptor == that.descriptor
 
     @property
     def path(self) -> Path:
@@ -593,7 +587,7 @@ class JSONBlob(Blob):
 
     def save(self) -> Blob:
         """Write JSON string in text mode"""
-        self.raw_content = json.dumps(self.to_python).encode("utf-8")
+        self.raw_content = json.dumps(self.to_python, separators=(",", ":")).encode("utf-8")
         return super().save()
 
     @property
