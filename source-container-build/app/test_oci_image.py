@@ -1,7 +1,9 @@
 import shutil
 import tempfile
-
 import unittest
+
+from pathlib import Path
+from typing import Final
 from source_build import Blob, OCIImage
 from test_source_build import create_blob, create_local_oci_image
 
@@ -95,6 +97,11 @@ class TestManifest(unittest.TestCase):
         oci_image = OCIImage(self.oci_image_path)
         self.manifest = oci_image.index.manifests()[0]
 
+        self.parent_image_path = tempfile.mkdtemp(prefix="tes_manifest_parent_image-")
+        create_local_oci_image(self.parent_image_path, [[b"0101"], [b"1010"]])
+        oci_image = OCIImage(self.parent_image_path)
+        self.parent_image_manifest = oci_image.index.manifests()[0]
+
     def tearDown(self):
         shutil.rmtree(self.oci_image_path)
 
@@ -122,6 +129,35 @@ class TestManifest(unittest.TestCase):
         self.manifest.layers[0].path.unlink()
         with self.assertRaisesRegex(ValueError, expected_regex=""):
             self.manifest.save()
+
+    def test_save_when_prepend_one_and_modify_an_existing_one(self):
+        layer: Final = self.manifest.layers[0]
+        layer.raw_content += b"new binary data"
+
+        parent_image_layers = self.parent_image_manifest.layers
+
+        parent_image_layer = parent_image_layers[1]
+        digest = parent_image_layer.descriptor["digest"]
+        shutil.copyfile(
+            parent_image_layer.path, Path(self.oci_image_path, "blobs", *digest.split(":"))
+        )
+        self.manifest.prepend_layer(parent_image_layer)
+
+        parent_image_layer = parent_image_layers[0]
+        digest = parent_image_layer.descriptor["digest"]
+        shutil.copyfile(
+            parent_image_layer.path, Path(self.oci_image_path, "blobs", *digest.split(":"))
+        )
+        self.manifest.prepend_layer(parent_image_layer)
+
+        new_manifest = self.manifest.save()
+
+        self.assertListEqual(new_manifest.layers[0:2], parent_image_layers)
+        for layer in new_manifest.layers:
+            self.assertTrue(layer.path.exists())
+
+        expected = layer.raw_content
+        self.assertEqual(new_manifest.layers[-1].raw_content, expected)
 
 
 class TestIndex(unittest.TestCase):

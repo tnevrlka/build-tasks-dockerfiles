@@ -637,17 +637,23 @@ class Manifest(JSONBlob):
 
     def save(self) -> Blob:
         """Save this manifest"""
+
         new_config = self.config.save()
         if new_config != self.config:
             self.to_python["config"] = new_config.descriptor
-        layer_descriptors = self.to_python["layers"]
-        for idx, layer in enumerate(self.layers):
+
+        layer_descriptors: list[DescriptorT] = self.to_python["layers"]
+        for layer in self.layers:
             if not layer.path.exists():
                 raise ValueError(f"layer {str(layer.path)} does not exist.")
             new_layer = layer.save()
-            if new_layer != layer:
-                layer_descriptors[idx] = new_layer.descriptor
-                layer.delete()
+            if new_layer == layer:
+                continue
+            for idx, d in enumerate(layer_descriptors):
+                if d["digest"] == layer.descriptor["digest"]:
+                    layer_descriptors[idx] = new_layer.descriptor
+                    layer.delete()
+
         return super().save()
 
 
