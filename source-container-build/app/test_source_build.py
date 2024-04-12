@@ -18,7 +18,7 @@ from tempfile import mkdtemp, mkstemp
 from pathlib import Path
 
 import source_build
-from source_build import BuildResult, DescriptorT, SourceImageBuildDirectories
+from source_build import BuildResult, DescriptorT, JSONBlob, SourceImageBuildDirectories
 
 import pytest
 
@@ -229,20 +229,20 @@ def create_local_oci_image(path: str, layers_data: list[list[bytes]]) -> None:
             },
         ],
     }
-    config_descriptor = create_blob(path, [json.dumps(config).encode("utf-8")], "config")
+    config_descriptor = create_blob(path, [JSONBlob.compact_json_dumps(config)], "config")
 
     manifest: ManifestT = {
         "schemaVersion": 2,
         "config": config_descriptor,
         "layers": [create_blob(path, data, "layer") for data in layers_data],
     }
-    manifest_descriptor = create_blob(path, [json.dumps(manifest).encode("utf-8")], "manifest")
+    manifest_descriptor = create_blob(path, [JSONBlob.compact_json_dumps(manifest)], "manifest")
 
     index_json = {
         "schemaVersion": 2,
         "manifests": [manifest_descriptor],
     }
-    Path(path, "index.json").write_text(json.dumps(index_json))
+    Path(path, "index.json").write_text(JSONBlob.compact_json_dumps(index_json).decode())
 
 
 class TestGetRepoInfo(unittest.TestCase):

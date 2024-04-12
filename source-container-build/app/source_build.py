@@ -585,9 +585,13 @@ class JSONBlob(Blob):
         super().__init__(*args, **kwargs)
         self._python_obj: dict | None = None
 
+    @staticmethod
+    def compact_json_dumps(data: Any) -> bytes:
+        return json.dumps(data, separators=(",", ":")).encode("utf-8")
+
     def save(self) -> Blob:
         """Write JSON string in text mode"""
-        self.raw_content = json.dumps(self.to_python, separators=(",", ":")).encode("utf-8")
+        self.raw_content = self.compact_json_dumps(self.to_python)
         return super().save()
 
     @property
