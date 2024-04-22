@@ -11,24 +11,17 @@ import json
 import unittest
 import zipfile
 from unittest.mock import patch, MagicMock, Mock
-from typing import Final, Literal, TypedDict
+from typing import Final
 from subprocess import CalledProcessError
 from dataclasses import dataclass
 from tempfile import mkdtemp, mkstemp
 from pathlib import Path
 
 import source_build
-from source_build import BuildResult, DescriptorT, JSONBlob, SourceImageBuildDirectories
+from source_build import BuildResult, DescriptorT, SourceImageBuildDirectories, BSILayer
+from test_utils import BlobTypeString, create_simple_oci_image
 
 import pytest
-
-BlobTypeString = Literal["config", "manifest", "layer"]
-
-
-class ManifestT(TypedDict):
-    schemaVersion: int
-    config: DescriptorT
-    layers: list[DescriptorT]
 
 
 FAKE_BSI: Final = "/testing/bsi"
@@ -201,48 +194,6 @@ def create_blob(root_dir: str, data: list[bytes], type_: BlobTypeString) -> Desc
         "digest": "sha256:" + checksum,
         "size": blob_file.stat().st_size,
     }
-
-
-def create_local_oci_image(path: str, layers_data: list[list[bytes]]) -> None:
-    """Create an OCI image for mocking downloading a source image
-
-    :param path: str, create OCI image under this directory.
-    :param layers_data: layers data to customize the tar archive per layer.
-        Each ``list[bytes]`` is per layer, and each ``bytes`` is per file included
-        in a tar archive.
-    :type layers_data: list[list[bytes]]
-    """
-    config = {
-        "config": {},
-        "rootfs": {
-            "type": "layers",
-            "diff_ids": ["sha256:d3ad52c", "sha256:e33845d"],
-        },
-        "history": [
-            {
-                "created": "2024-04-01T22:12:59.981978181+08:00",
-                "created_by": "#(nop) test adding artifact: e3b0c44",
-            },
-            {
-                "created": "2024-04-01T12:01:35.616350493+08:00",
-                "created_by": "#(nop) test adding artifact: aff9acf",
-            },
-        ],
-    }
-    config_descriptor = create_blob(path, [JSONBlob.compact_json_dumps(config)], "config")
-
-    manifest: ManifestT = {
-        "schemaVersion": 2,
-        "config": config_descriptor,
-        "layers": [create_blob(path, data, "layer") for data in layers_data],
-    }
-    manifest_descriptor = create_blob(path, [JSONBlob.compact_json_dumps(manifest)], "manifest")
-
-    index_json = {
-        "schemaVersion": 2,
-        "manifests": [manifest_descriptor],
-    }
-    Path(path, "index.json").write_text(JSONBlob.compact_json_dumps(index_json).decode())
 
 
 class TestGetRepoInfo(unittest.TestCase):
@@ -869,9 +820,8 @@ class TestBuildProcess(unittest.TestCase):
                         "oci: transport is not used for downloading parent sources",
                     )
                     image_download_dir = args.dest.removeprefix("oci:")
-                    create_local_oci_image(
-                        image_download_dir, [[b"data 1"], [b"data 2", b"data 3"]]
-                    )
+                    layers_data = [("libxml2-2.0-1.el9.src.rpm", b"1010101", "rpm_dir")]
+                    create_simple_oci_image(image_download_dir, layers_data)
 
                 return
 
@@ -893,7 +843,8 @@ class TestBuildProcess(unittest.TestCase):
                         self.fail(f"Expected pip dependency {self.PIP_PKG} is not included.")
 
                 # Write an OCI image as the result of bsi execution.
-                create_local_oci_image(parser.output_path, [[b"app source code"]])
+                layers_data = [(self.PIP_PKG, b"0101", "extra_src_dir")]
+                create_simple_oci_image(parser.output_path, layers_data)
 
         cli_cmd = [
             "source_build.py",
@@ -1177,3 +1128,94 @@ class TestResolveSourceImageByVersionRelease(unittest.TestCase):
 )
 def test_parse_image_name(image_pullspec, expected):
     assert expected == source_build.parse_image_name(image_pullspec)
+
+
+class TestDeduplicateSources(unittest.TestCase):
+    """Test deduplicate_sources"""
+
+    def setUp(self):
+        self.parent_sources_dir = mkdtemp(prefix="parent-sources-")
+        self.local_build_dir = mkdtemp(prefix="local-source-build-")
+
+    def tearDown(self):
+        shutil.rmtree(self.parent_sources_dir)
+        shutil.rmtree(self.local_build_dir)
+
+    def test_no_duplicate_there(self):
+        create_simple_oci_image(
+            self.parent_sources_dir,
+            [
+                ("requests-1.23-1.src.rpm", b"0101010", "rpm_dir"),
+                ("flask-2.0.tar.gz", b"0001111", "extra_src_dir"),
+            ],
+        )
+
+        create_simple_oci_image(
+            self.local_build_dir,
+            [
+                ("libxml2-2.3-10.src.rpm", b"11001100", "rpm_dir"),
+                ("gawk-5.1.0-6.el9.src.rpm", b"01100110", "rpm_dir"),
+                ("flask-2.1.tar.gz", b"01000111", "extra_src_dir"),
+            ],
+        )
+
+        source_build.deduplicate_sources(self.parent_sources_dir, self.local_build_dir)
+
+        local_build = source_build.OCIImage(self.local_build_dir)
+        manifest = local_build.index.manifests()[0]
+        self.assertEqual(3, len(manifest.layers))
+
+        parent_sources = source_build.OCIImage(self.parent_sources_dir)
+        manifest = parent_sources.index.manifests()[0]
+        self.assertEqual(2, len(manifest.layers))
+
+    def test_deduplicate(self):
+        create_simple_oci_image(
+            self.parent_sources_dir,
+            [
+                ("requests-1.23-1.src.rpm", b"0101010", "rpm_dir"),
+                ("flask-2.0.tar.gz", b"0001111", "extra_src_dir"),
+            ],
+        )
+
+        create_simple_oci_image(
+            self.local_build_dir,
+            [
+                ("libxml2-2.3-10.src.rpm", b"11001100", "rpm_dir"),
+                ("pcre2-10.40-2.el9.src.rpm", b"100100100", "rpm_dir"),
+                # this is the duplicate one to be removed
+                ("flask-2.0.tar.gz", b"0001111", "extra_src_dir"),
+            ],
+        )
+
+        source_build.deduplicate_sources(self.parent_sources_dir, self.local_build_dir)
+
+        local_build: Final = source_build.OCIImage(self.local_build_dir)
+        local_source_manifest: Final = local_build.index.manifests()[0]
+
+        self.assertEqual(2, len(local_source_manifest.layers))
+
+        expected = sorted(["libxml2-2.3-10.src.rpm", "pcre2-10.40-2.el9.src.rpm"])
+        remains_in_local_build: Final = sorted(
+            os.path.basename(BSILayer(layer).symlink_member.name)
+            for layer in local_source_manifest.layers
+        )
+        self.assertListEqual(expected, remains_in_local_build)
+
+        # Ensure parent sources remain without change
+        parent_sources: Final = source_build.OCIImage(self.parent_sources_dir)
+        parent_manifest: Final = parent_sources.index.manifests()[0]
+
+        self.assertEqual(2, len(local_source_manifest.layers))
+
+        remains_in_parent: list[str] = []
+        for layer in parent_manifest.layers:
+            bsi_layer = BSILayer(layer)
+            if bsi_layer.extra_source:
+                name = bsi_layer.extra_source.name
+            else:
+                name = bsi_layer.symlink_member.name
+            remains_in_parent.append(os.path.basename(name))
+
+        expected = sorted(["requests-1.23-1.src.rpm", "flask-2.0.tar.gz"])
+        self.assertListEqual(expected, sorted(remains_in_parent))
