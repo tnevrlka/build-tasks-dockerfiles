@@ -750,6 +750,7 @@ class TestBuildProcess(unittest.TestCase):
         parent_images: str = "",
         expect_parent_image_sources_included: bool = False,
         mock_nonexisting_source_image: bool = False,
+        source_image_is_resolved_by_version_release: bool = True,
     ):
         """Test include various sources and app source will always be included"""
 
@@ -785,13 +786,19 @@ class TestBuildProcess(unittest.TestCase):
                     self.assertNotIn(":9.3-1", dest_image, "tag is not removed from image pullspec")
 
                 if cmd[2] == "--config":
-                    return Mock(
-                        stdout=json.dumps(
-                            {"config": {"Labels": {"version": "9.3", "release": "1"}}}
-                        )
-                    )
+                    # Get image config
+                    if source_image_is_resolved_by_version_release:
+                        config = {"config": {"Labels": {"version": "9.3", "release": "1"}}}
+                    else:
+                        config = {"config": {"Labels": {}}}
+                    return Mock(stdout=json.dumps(config))
 
                 if cmd[2] == "--raw":
+                    if not source_image_is_resolved_by_version_release:
+                        dest_image = cmd[-1]
+                        source_tag = self.BINARY_IMAGE_MANIFEST_DIGEST.replace(":", "-") + ".src"
+                        self.assertTrue(dest_image.endswith(source_tag))
+
                     # Indicate the source image of parent image exists
                     if mock_nonexisting_source_image:
                         return Mock(returncode=1)
@@ -799,9 +806,8 @@ class TestBuildProcess(unittest.TestCase):
                         return Mock(returncode=0)
 
                 if cmd[2] == "--format":
-                    mock = Mock()
-                    mock.stdout = self.BINARY_IMAGE_MANIFEST_DIGEST
-                    return mock
+                    # Get image manifest
+                    return Mock(stdout=self.BINARY_IMAGE_MANIFEST_DIGEST)
 
             if run_cmd == ["skopeo", "copy"]:
                 args = create_skopeo_cli_parser().parse_args(cmd[1:])
@@ -956,6 +962,13 @@ class TestBuildProcess(unittest.TestCase):
         self._test_include_sources(
             parent_images=f"\ngolang:2\n\n{DISALLOWED_REGISTRY}/ubi9/ubi:9.3-1@sha256:123\n",
             expect_parent_image_sources_included=False,
+        )
+
+    def test_resolve_source_image_by_image_manifest(self):
+        self._test_include_sources(
+            parent_images="registry.access.example.com/ubi9/ubi:9.3-1@sha256:123\n",
+            expect_parent_image_sources_included=True,
+            source_image_is_resolved_by_version_release=False,
         )
 
     @patch("source_build.run")
@@ -1219,3 +1232,29 @@ class TestDeduplicateSources(unittest.TestCase):
 
         expected = sorted(["requests-1.23-1.src.rpm", "flask-2.0.tar.gz"])
         self.assertListEqual(expected, sorted(remains_in_parent))
+
+
+class TestResolveSourceImageByManifest(unittest.TestCase):
+    """Test resolve_source_image_by_manifest"""
+
+    @patch("source_build.run")
+    def test_source_image_is_resolved(self, mock_run: MagicMock):
+        manifest_digest = "sha256:123456"
+        skopeo_inspect_digest_rv = Mock(stdout=manifest_digest)
+        skopeo_inspect_raw_rv = Mock(returncode=0)
+        mock_run.side_effect = [skopeo_inspect_digest_rv, skopeo_inspect_raw_rv]
+
+        source_image = source_build.resolve_source_image_by_manifest("registry.io:3000/ns/app:1.0")
+
+        self.assertEqual("registry.io:3000/ns/app:sha256-123456.src", source_image)
+
+    @patch("source_build.run")
+    def test_source_image_does_not_exist(self, mock_run: MagicMock):
+        manifest_digest = "sha256:123456"
+        skopeo_inspect_digest_rv = Mock(stdout=manifest_digest)
+        skopeo_inspect_raw_rv = Mock(returncode=1)
+        mock_run.side_effect = [skopeo_inspect_digest_rv, skopeo_inspect_raw_rv]
+
+        source_image = source_build.resolve_source_image_by_manifest("registry.io:3000/ns/app:1.0")
+
+        self.assertIsNone(source_image)

@@ -389,6 +389,12 @@ def push_to_registry(image_build_output_dir: str, dest_images: list[str]) -> str
         return f.read().strip()
 
 
+def generate_konflux_source_image(image: str) -> str:
+    # in format: sha256:1234567
+    digest = fetch_image_manifest_digest(image)
+    return f"{image.rsplit(':', 1)[0]}:{digest.replace(':', '-')}.src"
+
+
 def generate_source_images(image: str) -> list[str]:
     """Generate source container images from the built binary image
 
@@ -397,11 +403,7 @@ def generate_source_images(image: str) -> list[str]:
     """
     # For backward-compatibility. It will be removed in near future.
     deprecated_image = f"{image}.src"
-
-    # in format: sha256:1234567
-    digest = fetch_image_manifest_digest(image)
-    source_image = f"{image.rsplit(':', 1)[0]}:{digest.replace(':', '-')}.src"
-
+    source_image = generate_konflux_source_image(image)
     return [deprecated_image, source_image]
 
 
@@ -420,11 +422,27 @@ def resolve_source_image_by_version_release(binary_image: str) -> str | None:
     release = config_data["config"]["Labels"].get("release")
     if not (version and release):
         log.warning("Image %s is not labelled with version and release.", binary_image)
-        return
+        return None
     # Remove possible tag or digest from binary image
     source_image = f"{name}:{version}-{release}-source"
     if registry_has_image(source_image):
         return source_image
+    else:
+        log.info("Source container image %s does not exist.", source_image)
+
+
+def resolve_source_image_by_manifest(image: str) -> str | None:
+    """Resolve source image by following Konflux source image scheme
+
+    :param image: str, a binary image whose source image is resolved.
+    :return: the resolved source image URL. If no one is resolved, None is returned.
+    """
+    source_image = generate_konflux_source_image(image)
+    if registry_has_image(source_image):
+        return source_image
+    else:
+        log = logging.getLogger(f"{logger.name}.resolve_source_image")
+        log.info("Source container image %s does not exist.", source_image)
 
 
 def parse_image_name(image: str) -> tuple[str, str, str]:
@@ -997,11 +1015,11 @@ def build(args) -> BuildResult:
 
         allowed = urlparse("docker://" + base_image).netloc in args.registry_allowlist
         if allowed:
-            source_image = resolve_source_image_by_version_release(base_image)
+            source_image = resolve_source_image_by_version_release(
+                base_image
+            ) or resolve_source_image_by_manifest(base_image)
             if source_image:
                 parent_sources_dir = download_parent_image_sources(source_image, work_dir)
-            else:
-                logger.warning("Registry does not have source image %s", source_image)
         else:
             logger.info(
                 "Image %s does not come from supported allowed registry. "
