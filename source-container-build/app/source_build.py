@@ -780,8 +780,7 @@ class BSILayer:
     def symlink_member(self) -> TarInfo:
         """Return symlink member
 
-        :return: a ``tarfile.TarInfo`` representing the symlink member. None is
-            returned, if no such member is found from a layer.
+        :return: a ``tarfile.TarInfo`` representing the symlink member.
         """
         return self._symlink_member  # type: ignore
 
@@ -789,8 +788,7 @@ class BSILayer:
     def blob_member(self) -> TarInfo:
         """Return blob member
 
-        :return: a ``tarfile.TarInfo`` representing the blob member. None is
-            returned, if no such member is found from a layer.
+        :return: a ``tarfile.TarInfo`` representing the blob member.
         """
         return self._blob_member  # type: ignore
 
