@@ -880,7 +880,7 @@ class BSILayer:
         """Check if this layer contains same content of the other"""
         if not isinstance(other, BSILayer):
             return False
-        return hash(self) == hash(other)
+        return self.hash_key() == other.hash_key()
 
 
 def merge_image(parent_sources_dir: str, local_source_build: str) -> None:
