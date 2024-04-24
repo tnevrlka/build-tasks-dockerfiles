@@ -804,7 +804,7 @@ class BSILayer:
         Example arcname: ./extra_src_dir/extra-src-100.tar
         """
         dirname, basename = os.path.split(member.name)
-        regex: Final = r"^extra-src-\d+\.tar$"
+        regex: Final = r"^extra-src-[0-9a-f]+\.tar$"
         return (
             member.issym()
             and dirname == "./extra_src_dir"

@@ -1,6 +1,7 @@
 import functools
 import gzip
 import hashlib
+import itertools
 import os
 import shutil
 import tarfile
@@ -63,6 +64,9 @@ def generate_extra_src_tar(artifact_name: str, content: bytes) -> str:
     return archive
 
 
+extra_src_file_idx = itertools.cycle("01")
+
+
 def create_layer_archive(
     artifact_name: str, content: bytes, source_driver: BSISourceDriver, work_dir: str | None = None
 ) -> str:
@@ -79,6 +83,8 @@ def create_layer_archive(
 
     fd, layer_archive = mkstemp(prefix="layer-archive-", dir=work_dir)
     os.close(fd)
+
+    extra_src_files = ["extra-src-0.tar", "extra-src-61a2c45.tar"]
 
     try:
         blob_dir = Path("blobs", "sha256")
@@ -98,7 +104,8 @@ def create_layer_archive(
             os.unlink(extra_src_tar)
 
             os.mkdir(source_driver)
-            Path(source_driver, "extra-src-0.tar").symlink_to(
+            extra_src_archive = extra_src_files[int(next(extra_src_file_idx))]
+            Path(source_driver, extra_src_archive).symlink_to(
                 Path("..", "blobs", "sha256", checksum)
             )
         else:
