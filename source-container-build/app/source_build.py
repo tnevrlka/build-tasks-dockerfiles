@@ -445,6 +445,15 @@ def resolve_source_image_by_manifest(image: str) -> str | None:
         log.info("Source container image %s does not exist.", source_image)
 
 
+def resolve_source_image(binary_image: str, registries_allow_list: list[str]) -> str | None:
+    allowed = urlparse("docker://" + binary_image).netloc in registries_allow_list
+    if allowed:
+        return resolve_source_image_by_version_release(binary_image)
+    else:
+        logger.info("Image %s does not come from supported allowed registry.", binary_image)
+    return resolve_source_image_by_manifest(binary_image)
+
+
 def parse_image_name(image: str) -> tuple[str, str, str]:
     """Rough image name parser
 
@@ -1013,19 +1022,11 @@ def build(args) -> BuildResult:
             logger.info("Multiple base images are specified: %r", base_images)
         base_image = base_images[-1]
 
-        allowed = urlparse("docker://" + base_image).netloc in args.registry_allowlist
-        if allowed:
-            source_image = resolve_source_image_by_version_release(
-                base_image
-            ) or resolve_source_image_by_manifest(base_image)
-            if source_image:
-                parent_sources_dir = download_parent_image_sources(source_image, work_dir)
+        source_image = resolve_source_image(base_image, args.registry_allowlist)
+        if source_image:
+            parent_sources_dir = download_parent_image_sources(source_image, work_dir)
         else:
-            logger.info(
-                "Image %s does not come from supported allowed registry. "
-                "Skip handling the sources for it.",
-                base_image,
-            )
+            logger.info("Source image is not resolved for image %s", base_image)
     else:
         logger.info("No base image is specified. Skip handling sources of base image.")
 

@@ -958,17 +958,11 @@ class TestBuildProcess(unittest.TestCase):
             expect_parent_image_sources_included=True,
         )
 
-    def test_not_include_parent_image_sources_from_disallowed_registry(self):
+    def test_resolve_konflux_source_image(self):
         self._test_include_sources(
-            parent_images=f"\ngolang:2\n\n{DISALLOWED_REGISTRY}/ubi9/ubi:9.3-1@sha256:123\n",
-            expect_parent_image_sources_included=False,
-        )
-
-    def test_resolve_source_image_by_image_manifest(self):
-        self._test_include_sources(
-            parent_images="registry.access.example.com/ubi9/ubi:9.3-1@sha256:123\n",
+            # the registry is not in the allow list. Konflux source image will be resolved.
+            parent_images="user-registry.io/ubi9/ubi:9.3-1@sha256:123\n",
             expect_parent_image_sources_included=True,
-            source_image_is_resolved_by_version_release=False,
         )
 
     @patch("source_build.run")
