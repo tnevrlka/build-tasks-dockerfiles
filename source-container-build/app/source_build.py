@@ -326,7 +326,7 @@ def make_source_archive(
     mtime_process = run(mtime_cmd, check=True, cwd=source_dir, capture_output=True, text=True)
     mtime = mtime_process.stdout.strip()
 
-    ls_cmd = ["git", "ls-files", "--recurse-submodules"]
+    ls_cmd = ["git", "ls-files", "--recurse-submodules", "-z"]
     log.debug("Generate source repo file list %r", ls_cmd)
     git_process = run(ls_cmd, check=True, cwd=source_dir, capture_output=True, text=True)
 
@@ -338,6 +338,7 @@ def make_source_archive(
         mtime,
         "--transform",
         f"s,^,{name_sha}/,",
+        "--null",
         "-T-",
     ]
     log.debug("Generate source archive %r", tar_cmd)
