@@ -56,6 +56,7 @@ def init_app_source_repo_dir() -> AppSourceDirs:
       + origin repo (as a repository hosed in remote)
       + cloned repo (as the one cloned into workspace)
     """
+    nonlatin_filename: Final = "𞤀𞤣𞤤𞤢𞤥 𞤆𞤵𞤤𞤢𞤪.txt"
     repos_root = mkdtemp()
     origin_path = os.path.join(repos_root, REPO_NAME)
     os.mkdir(origin_path)
@@ -63,13 +64,15 @@ def init_app_source_repo_dir() -> AppSourceDirs:
         ["git", "init"],
         ["git", "config", "user.name", "tester"],
         ["git", "config", "user.email", "tester@example.com"],
-        ["git", "add", "README.md", "main.py"],
+        ["git", "add", "README.md", "main.py", nonlatin_filename],
         ["git", "commit", "-m", "first commit for testing"],
     ]
     with open(os.path.join(origin_path, "README.md"), "w") as f:
         f.write("Testing repo")
     with open(os.path.join(origin_path, "main.py"), "w") as f:
         f.write("import this")
+    with open(os.path.join(origin_path, nonlatin_filename), "w") as f:
+        f.write("test: file name includes nonlatin characters")
     for cmd in cmds:
         subprocess.run(cmd, check=True, cwd=origin_path)
 
