@@ -1234,16 +1234,30 @@ class TestDeduplicateSources(unittest.TestCase):
 class TestResolveSourceImageByManifest(unittest.TestCase):
     """Test resolve_source_image_by_manifest"""
 
-    @patch("source_build.run")
-    def test_source_image_is_resolved(self, mock_run: MagicMock):
-        manifest_digest = "sha256:123456"
-        skopeo_inspect_digest_rv = Mock(stdout=manifest_digest)
-        skopeo_inspect_raw_rv = Mock(returncode=0)
-        mock_run.side_effect = [skopeo_inspect_digest_rv, skopeo_inspect_raw_rv]
+    def test_source_image_is_resolved(self):
+        manifest_digest: Final = "sha256:123456"
 
-        source_image = source_build.resolve_source_image_by_manifest("registry.io:3000/ns/app:1.0")
+        tests = [
+            ["registry.io:3000/ns/app:1.0", "registry.io:3000/ns/app:1.0"],
+            [
+                f"registry.io:3000/ns/app:1.0@{manifest_digest}",
+                f"registry.io:3000/ns/app@{manifest_digest}",
+            ],
+        ]
 
-        self.assertEqual("registry.io:3000/ns/app:sha256-123456.src", source_image)
+        for binary_image, expected_skopeo_dest_arg in tests:
+            with patch("source_build.run") as mock_run:
+                skopeo_inspect_digest_rv = Mock(stdout=manifest_digest)
+                skopeo_inspect_raw_rv = Mock(returncode=0)
+                mock_run.side_effect = [skopeo_inspect_digest_rv, skopeo_inspect_raw_rv]
+
+                source_image = source_build.resolve_source_image_by_manifest(binary_image)
+
+                self.assertEqual("registry.io:3000/ns/app:sha256-123456.src", source_image)
+
+                run_cmd = mock_run.mock_calls[0].args[0]
+                dest = run_cmd[-1]
+                self.assertEqual(dest.removeprefix("docker://"), expected_skopeo_dest_arg)
 
     @patch("source_build.run")
     def test_source_image_does_not_exist(self, mock_run: MagicMock):
