@@ -392,8 +392,13 @@ def push_to_registry(image_build_output_dir: str, dest_images: list[str]) -> str
 
 def generate_konflux_source_image(image: str) -> str:
     # in format: sha256:1234567
-    digest = fetch_image_manifest_digest(image)
-    return f"{image.rsplit(':', 1)[0]}:{digest.replace(':', '-')}.src"
+    name, tag, digest = parse_image_name(image)
+    if digest:
+        cleaned_image = f"{name}@{digest}"
+    else:
+        cleaned_image = f"{name}:{tag}"
+    digest = fetch_image_manifest_digest(cleaned_image)
+    return f"{name}:{digest.replace(':', '-')}.src"
 
 
 def generate_source_images(image: str) -> list[str]:
