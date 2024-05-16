@@ -12,7 +12,7 @@ import unittest
 import zipfile
 from unittest.mock import patch, MagicMock, Mock
 from typing import Final
-from subprocess import CalledProcessError
+from subprocess import CalledProcessError, CompletedProcess
 from dataclasses import dataclass
 from tempfile import mkdtemp, mkstemp
 from pathlib import Path
@@ -641,15 +641,14 @@ class TestBuildProcess(unittest.TestCase):
     def test_not_write_build_result_to_file(self, run):
         def run_side_effect(cmd, **kwargs):
             """Make the make_source_archive work"""
-            completed_proc = Mock()
-            git_cmd = cmd[:2]
-            if git_cmd == ["git", "rev-parse"]:
-                completed_proc.stdout = "1234567"
-            elif git_cmd == ["git", "config"]:
-                completed_proc.stdout = "https://githost/org/app.git"
-            else:
-                completed_proc.stdout = ""  # No other calls depend on the stdout
-            return completed_proc
+            match cmd:
+                case ["git", "rev-parse", *_]:
+                    return CompletedProcess(cmd, 0, "1234567")
+                case ["git", "config", *_]:
+                    return CompletedProcess(cmd, 0, "https://githost/org/app.git")
+                case _:
+                    # No other calls depend on the stdout
+                    return CompletedProcess(cmd, 0, "")
 
         run.side_effect = run_side_effect
 
@@ -762,98 +761,90 @@ class TestBuildProcess(unittest.TestCase):
         pushed_images: list[str] = []
 
         def run_side_effect(cmd, **kwargs):
-            run_cmd = cmd[:2]
-            if run_cmd == ["git", "rev-parse"]:
-                completed_proc = Mock()
-                completed_proc.stdout = "1234567"
-                return completed_proc
+            match cmd:
+                case ["git", "rev-parse", *_]:
+                    # Get last commit hash
+                    return CompletedProcess(cmd, 0, stdout="1234567")
 
-            if run_cmd == ["git", "config"]:
-                completed_proc = Mock()
-                completed_proc.stdout = "https://githost/org/app.git"
-                return completed_proc
+                case ["git", "config", *_]:
+                    # Get remote origin url
+                    return CompletedProcess(cmd, 0, stdout="https://githost/org/app.git")
 
-            if run_cmd == ["git", "ls-files"]:
-                completed_proc = Mock()
-                completed_proc.stdout = "file.txt"
-                return completed_proc
+                case ["git", "ls-files", *_]:
+                    # Get list of files for making source archive
+                    return CompletedProcess(cmd, 0, stdout="file.txt")
 
-            if run_cmd == ["git", "show"]:
-                completed_proc = Mock()
-                completed_proc.stdout = "2024-03-20T21:57:06-04:00"
-                return completed_proc
+                case ["git", "show", *_]:
+                    # Get the timestamp of last commit
+                    return CompletedProcess(cmd, 0, stdout="2024-03-20T21:57:06-04:00")
 
-            if run_cmd == ["skopeo", "inspect"]:
-                if parent_images:
-                    dest_image = run_cmd[-1]
-                    self.assertNotIn(":9.3-1", dest_image, "tag is not removed from image pullspec")
+                case ["skopeo", "inspect", "--config", *_]:
+                    if parent_images:
+                        dest_image = cmd[-1]
+                        self.assertNotIn(
+                            ":9.3-1", dest_image, "tag is not removed from image pullspec"
+                        )
 
-                if cmd[2] == "--config":
                     # Get image config
                     if source_image_is_resolved_by_version_release:
                         config = {"config": {"Labels": {"version": "9.3", "release": "1"}}}
                     else:
                         config = {"config": {"Labels": {}}}
-                    return Mock(stdout=json.dumps(config))
+                    return CompletedProcess(cmd, 0, stdout=json.dumps(config))
 
-                if cmd[2] == "--raw":
+                case ["skopeo", "inspect", "--raw", *_]:
                     if not source_image_is_resolved_by_version_release:
                         dest_image = cmd[-1]
                         source_tag = self.BINARY_IMAGE_MANIFEST_DIGEST.replace(":", "-") + ".src"
                         self.assertTrue(dest_image.endswith(source_tag))
 
                     # Indicate the source image of parent image exists
-                    if mock_nonexisting_source_image:
-                        return Mock(returncode=1)
-                    else:
-                        return Mock(returncode=0)
+                    return CompletedProcess(cmd, int(mock_nonexisting_source_image))
 
-                if cmd[2] == "--format":
+                case ["skopeo", "inspect", "--format", *_]:
                     # Get image manifest
-                    return Mock(stdout=self.BINARY_IMAGE_MANIFEST_DIGEST)
+                    return CompletedProcess(cmd, 0, stdout=self.BINARY_IMAGE_MANIFEST_DIGEST)
 
-            if run_cmd == ["skopeo", "copy"]:
-                args = create_skopeo_cli_parser().parse_args(cmd[1:])
+                case ["skopeo", "copy", *_]:
+                    args = create_skopeo_cli_parser().parse_args(cmd[1:])
 
-                if args.digest_file:
-                    # copy for pushing the source image to registry
-                    with open(args.digest_file, "w") as f:
-                        f.write(self.FAKE_IMAGE_DIGEST)
-                    pushed_images.append(args.dest.removeprefix("docker://"))
-                    return
+                    if args.digest_file:
+                        # copy for pushing the source image to registry
+                        with open(args.digest_file, "w") as f:
+                            f.write(self.FAKE_IMAGE_DIGEST)
+                        pushed_images.append(args.dest.removeprefix("docker://"))
+                        return
 
-                # copy for downloading parent sources container
-                if args.remove_signatures:
-                    self.assertTrue(
-                        args.dest.startswith("oci:"),
-                        "oci: transport is not used for downloading parent sources",
-                    )
-                    image_download_dir = args.dest.removeprefix("oci:")
-                    layers_data = [("libxml2-2.0-1.el9.src.rpm", b"1010101", "rpm_dir")]
-                    create_simple_oci_image(image_download_dir, layers_data)
+                    # copy for downloading parent sources container
+                    if args.remove_signatures:
+                        self.assertTrue(
+                            args.dest.startswith("oci:"),
+                            "oci: transport is not used for downloading parent sources",
+                        )
+                        image_download_dir = args.dest.removeprefix("oci:")
+                        layers_data = [("libxml2-2.0-1.el9.src.rpm", b"1010101", "rpm_dir")]
+                        create_simple_oci_image(image_download_dir, layers_data)
 
-                return
+                case [self.bsi, *_]:
+                    parser = create_bsi_cli_parser().parse_args(cmd[1:])
 
-            if run_cmd[0] == self.bsi:
-                parser = create_bsi_cli_parser().parse_args(cmd[1:])
-
-                for dir_path in parser.extra_src_dirs:
-                    if dir_path.strip("/").endswith("source_archive"):
-                        break
-                else:
-                    self.fail("app source is not gathered.")
-
-                if include_prefetched_sources:
-                    self.assertEqual(2, len(parser.extra_src_dirs))
                     for dir_path in parser.extra_src_dirs:
-                        if os.path.exists(os.path.join(dir_path, "deps", "pip", self.PIP_PKG)):
+                        if dir_path.strip("/").endswith("source_archive"):
                             break
                     else:
-                        self.fail(f"Expected pip dependency {self.PIP_PKG} is not included.")
+                        self.fail("app source is not gathered.")
 
-                # Write an OCI image as the result of bsi execution.
-                layers_data = [(self.PIP_PKG, b"0101", "extra_src_dir")]
-                create_simple_oci_image(parser.output_path, layers_data)
+                    if include_prefetched_sources:
+                        self.assertEqual(2, len(parser.extra_src_dirs))
+                        for dir_path in parser.extra_src_dirs:
+                            if os.path.exists(os.path.join(dir_path, "deps", "pip", self.PIP_PKG)):
+                                break
+                        else:
+                            self.fail(f"Expected pip dependency {self.PIP_PKG} is not included.")
+
+                    # Write an OCI image as the result of bsi execution.
+                    layers_data = [(self.PIP_PKG, b"0101", "extra_src_dir")]
+                    create_simple_oci_image(parser.output_path, layers_data)
 
         cli_cmd = [
             "source_build.py",
@@ -972,15 +963,14 @@ class TestBuildProcess(unittest.TestCase):
     def test_create_a_temp_dir_as_workspace(self, run):
         def run_side_effect(cmd, **kwargs):
             """Make the make_source_archive work"""
-            completed_proc = Mock()
-            git_cmd = cmd[:2]
-            if git_cmd == ["git", "rev-parse"]:
-                completed_proc.stdout = "1234567"
-            elif git_cmd == ["git", "config"]:
-                completed_proc.stdout = "https://githost/org/app.git"
-            else:
-                completed_proc.stdout = ""  # No other calls depend on the stdout
-            return completed_proc
+            match cmd:
+                case ["git", "rev-parse", *_]:
+                    return CompletedProcess(cmd, 0, "1234567")
+                case ["git", "config", *_]:
+                    return CompletedProcess(cmd, 0, "https://githost/org/app.git")
+                case _:
+                    # No other calls depend on the stdout
+                    return CompletedProcess(cmd, 0, "")
 
         run.side_effect = run_side_effect
 
