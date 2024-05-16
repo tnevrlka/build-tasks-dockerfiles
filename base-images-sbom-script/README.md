@@ -1,7 +1,7 @@
 # base images sbom script
 
 This is a script that creates sbom data for base images. It is used in 
-[buildah task](https://github.com/redhat-appstudio/build-definitions/tree/main/task/buildah) in Konflux pipelines.
+[buildah task](https://github.com/konflux-ci/build-definitions/tree/main/task/buildah) in Konflux pipelines.
 
 It takes several inputs:
 1. path to the sbom file, that will be updated in place with the base image data
