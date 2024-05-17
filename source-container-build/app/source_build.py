@@ -407,10 +407,8 @@ def generate_source_images(image: str) -> list[str]:
     :param image: str, represent the built image.
     :return: list of generated source container images.
     """
-    # For backward-compatibility. It will be removed in near future.
-    deprecated_image = f"{image}.src"
     source_image = generate_konflux_source_image(image)
-    return [deprecated_image, source_image]
+    return [source_image]
 
 
 def resolve_source_image_by_version_release(binary_image: str) -> str | None:

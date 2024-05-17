@@ -913,7 +913,7 @@ class TestBuildProcess(unittest.TestCase):
         expected_source_image = f"{image_repo}:{image_tag}"
         self.assertEqual(expected_source_image, build_result["image_url"])
 
-        self.assertListEqual([f"{OUTPUT_BINARY_IMAGE}.src", expected_source_image], pushed_images)
+        self.assertListEqual([expected_source_image], pushed_images)
 
     def test_just_include_app_source(self):
         self._test_include_sources()
