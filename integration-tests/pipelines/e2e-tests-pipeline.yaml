@@ -50,7 +50,7 @@ spec:
         - name: app_suffix
           value: "build-tasks-dockerfiles"
         - name: ec_pipelines_repo_url
-          value: "https://github.com/redhat-appstudio/build-definitions.git"
+          value: "https://github.com/konflux-ci/build-definitions.git"
         - name: ec_pipelines_repo_revision
           value: "main"
         - name: custom_source_build_bundle
@@ -61,9 +61,9 @@ spec:
         resolver: git
         params:
           - name: url
-            value: "https://github.com/tisutisu/build-tasks-dockerfiles.git"
+            value: "https://github.com/redhat-appstudio/build-tasks-dockerfiles.git"
           - name: revision
-            value: "add-integration-test"
+            value: "main"
           - name: pathInRepo
             value: integration-tests/tasks/e2e-test.yaml
       timeout: "2h"
