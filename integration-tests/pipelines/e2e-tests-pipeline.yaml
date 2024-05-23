@@ -1,0 +1,75 @@
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: e2e-tests-pipeline
+spec:
+  params:
+    - description: 'Snapshot of the application'
+      name: SNAPSHOT
+      default: ''
+      type: string
+    - name: e2e_test_namespace
+      default: "build-templates-e2e"
+      description: "namespace where e2e-tests will be executed"
+  tasks:
+    - name: prepare-e2e-tests
+      params:
+        - name: SNAPSHOT
+          value: $(params.SNAPSHOT)
+      taskSpec:
+        params:
+        - name: SNAPSHOT
+        results:
+          - name: custom-source-build-bundle
+            description: "custom bundle for source build pipeline"
+        steps:
+          - name: e2e-tests
+            image: quay.io/redhat-appstudio/appstudio-utils:18295e56febef33711ddf0229fdd57052bd12738
+            env:
+            - name: SNAPSHOT
+              value: $(params.SNAPSHOT)
+            script: |
+              echo "SNAPSHOT: ${SNAPSHOT}"
+              export SOURCE_IMAGE=$(jq -r .components[0].containerImage <<< "$SNAPSHOT")
+              echo "Built image: ${SOURCE_IMAGE}"
+              
+              git clone --branch main https://github.com/redhat-appstudio/e2e-tests.git
+              cd e2e-tests/
+              make setup-source-build | tee cmd_output
+              last_line_output=$(tail -n 1 cmd_output)
+              IFS='='
+              read -ra arr <<< "$last_line_output"
+              custom_source_build_bundle=${arr[1]}
+
+              echo -n ${custom_source_build_bundle} | tee $(results.custom-source-build-bundle.path)
+
+    - name: run-e2e-tests
+      params:
+        - name: e2e_test_namespace
+          value: "$(params.e2e_test_namespace)"
+        - name: app_suffix
+          value: "build-tasks-dockerfiles"
+        - name: ec_pipelines_repo_url
+          value: "https://github.com/konflux-ci/build-definitions.git"
+        - name: ec_pipelines_repo_revision
+          value: "main"
+        - name: custom_source_build_bundle
+          value: "$(tasks.prepare-e2e-tests.results.custom-source-build-bundle)"
+      runAfter:
+        - prepare-e2e-tests
+      taskRef:
+        resolver: git
+        params:
+          - name: url
+            value: "https://github.com/redhat-appstudio/build-tasks-dockerfiles.git"
+          - name: revision
+            value: "main"
+          - name: pathInRepo
+            value: integration-tests/tasks/e2e-test.yaml
+      timeout: "2h"
+  
+  timeouts:
+    pipeline: "2h"
+
+
+

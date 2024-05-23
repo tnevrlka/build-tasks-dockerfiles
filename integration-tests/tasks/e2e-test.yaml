@@ -1,0 +1,54 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: e2e-test
+spec:
+  description: >-
+    This task can be used to run e2e tests
+  params:
+    - name: e2e_test_namespace
+      type: string
+    - name: app_suffix
+      type: string
+    - name: ec_pipelines_repo_url
+      type: string
+    - name: ec_pipelines_repo_revision
+      type: string
+    - name: custom_source_build_bundle
+      type: string
+  steps:
+    - name: e2e-test
+      image: quay.io/redhat-appstudio/e2e-tests:64f0950aca3528b376053572c37dd8cd018775de
+      args: [
+        "--ginkgo.label-filter=source-build-e2e",
+        "--ginkgo.no-color",
+        "--ginkgo.v",
+        "--ginkgo.timeout=2h"
+      ]
+      securityContext:
+        capabilities:
+          add:
+          - SETFCAP
+      env:
+      - name: APP_SUFFIX
+        value: "$(params.app_suffix)"
+      - name: COMPONENT_REPO_URLS
+        value: "https://github.com/redhat-appstudio-qe/source-build-parent-image-with-digest-only,https://github.com/redhat-appstudio-qe/source-build-use-latest-parent-image,https://github.com/redhat-appstudio-qe/source-build-parent-image-from-registry-rh-io,https://github.com/redhat-appstudio-qe/source-build-base-on-konflux-image"
+      - name: QUAY_E2E_ORGANIZATION
+        value: redhat-appstudio-qe
+      - name: E2E_APPLICATIONS_NAMESPACE
+        value: "$(params.e2e_test_namespace)"
+      - name: GITHUB_TOKEN
+        valueFrom:
+          secretKeyRef:
+            name: e2e-tests-github-token
+            key: password
+      - name: MY_GITHUB_ORG
+      # Need to be changed to redhat-appstudio-appdata
+        value: susdas-qe
+      - name: EC_PIPELINES_REPO_URL
+        value: $(params.ec_pipelines_repo_url)
+      - name: EC_PIPELINES_REPO_REVISION
+        value: $(params.ec_pipelines_repo_revision)
+      - name: CUSTOM_SOURCE_BUILD_PIPELINE_BUNDLE
+        value: $(params.custom_source_build_bundle)
