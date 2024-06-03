@@ -1,6 +1,6 @@
 # Source Container Build
 
-Used by [source build task](https://github.com/redhat-appstudio/build-definitions/tree/main/task/source-build) in Konflux pipelines.
+Used by [source build task](https://github.com/konflux-ci/build-definitions/tree/main/task/source-build) in Konflux pipelines.
 
 ## Build Image
 
@@ -29,7 +29,7 @@ push event (when a pull request is merged).
 1. Proposed changes are merged in this repository, then image is built and
    pushed to the registry.
 2. Renovate detects the new image and sends an update pull request to
-   [redhat-appstudio/build-definitions](https://github.com/redhat-appstudio/build-definitions/) repository.
+   [konflux-ci/build-definitions](https://github.com/konflux-ci/build-definitions/) repository.
 3. Review and merge that pull request.
 4. A new source build task bundle is built and pushed to registry.
 5. Components repositories receive bundle update pull request, which is sent
