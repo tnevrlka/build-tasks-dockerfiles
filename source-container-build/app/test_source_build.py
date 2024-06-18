@@ -8,6 +8,7 @@ import stat
 import subprocess
 import tarfile
 import json
+import textwrap
 import unittest
 import zipfile
 from unittest.mock import patch, MagicMock, Mock
@@ -957,6 +958,17 @@ class TestBuildProcess(unittest.TestCase):
             # the registry is not in the allow list. Konflux source image will be resolved.
             parent_images="user-registry.io/ubi9/ubi:9.3-1@sha256:123\n",
             expect_parent_image_sources_included=True,
+        )
+
+    def test_skip_handling_local_image(self):
+        parent_images = textwrap.dedent(
+            """\
+            registry.io/ubi9/ubi:9.3-1@sha256:123
+            localhost/konflux-final-image@sha256:123
+            """
+        )
+        self._test_include_sources(
+            parent_images=parent_images, expect_parent_image_sources_included=False
         )
 
     @patch("source_build.run")
