@@ -1,0 +1,24 @@
+From 9962ccf0dc464bcc3da5ee36c199c0dfff098055 Mon Sep 17 00:00:00 2001
+From: Chenxiong Qi <cqi@redhat.com>
+Date: Tue, 18 Jun 2024 22:48:25 +0800
+Subject: [PATCH] Set mediaType on image manifest
+
+---
+ BuildSourceImage.sh | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/BuildSourceImage.sh b/BuildSourceImage.sh
+index ace5232..c1a8bf1 100755
+--- a/BuildSourceImage.sh
++++ b/BuildSourceImage.sh
+@@ -544,6 +544,7 @@ layout_new_bash() {
+     mnfst='
+ {
+   "schemaVersion": 2,
++  "mediaType": "application/vnd.oci.image.manifest.v1+json",
+   "config": {
+     "mediaType": "application/vnd.oci.image.config.v1+json",
+     "digest": "sha256:'"${config_sum}"'",
+-- 
+2.45.1
+
