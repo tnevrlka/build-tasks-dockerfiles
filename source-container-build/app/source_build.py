@@ -449,7 +449,14 @@ def resolve_source_image_by_manifest(image: str) -> str | None:
         log.info("Source container image %s does not exist.", source_image)
 
 
+def is_local_image(image: str) -> bool:
+    return image.startswith("localhost/")
+
+
 def resolve_source_image(binary_image: str, registries_allow_list: list[str]) -> str | None:
+    if is_local_image(binary_image):
+        logger.info("Skip handling local image %s.", binary_image)
+        return None
     allowed = urlparse("docker://" + binary_image).netloc in registries_allow_list
     if allowed:
         return resolve_source_image_by_version_release(binary_image)
