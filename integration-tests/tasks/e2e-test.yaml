@@ -18,7 +18,7 @@ spec:
       type: string
   steps:
     - name: e2e-test
-      image: quay.io/redhat-appstudio/e2e-tests:64f0950aca3528b376053572c37dd8cd018775de
+      image: quay.io/konflux-ci/e2e-tests:b0b939336a9052dc0c53f75b22a2e82590752d1c
       args: [
         "--ginkgo.label-filter=source-build-e2e",
         "--ginkgo.no-color",
