@@ -32,7 +32,7 @@ spec:
               echo "SNAPSHOT: ${SNAPSHOT}"
               export SOURCE_IMAGE=$(jq -r .components[0].containerImage <<< "$SNAPSHOT")
               echo "Built image: ${SOURCE_IMAGE}"
-              
+
               git clone --branch main https://github.com/redhat-appstudio/e2e-tests.git
               cd e2e-tests/
               make setup-source-build | tee cmd_output
@@ -67,9 +67,6 @@ spec:
           - name: pathInRepo
             value: integration-tests/tasks/e2e-test.yaml
       timeout: "2h"
-  
+
   timeouts:
     pipeline: "2h"
-
-
-
