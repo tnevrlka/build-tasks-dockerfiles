@@ -18,7 +18,7 @@ spec:
       type: string
   steps:
     - name: e2e-test
-      image: quay.io/redhat-user-workloads/rhtap-qe-shared-tenant/konflux-e2e/konflux-e2e-tests:ecbc63890c6f756a3a2ca5b367a5d1eda8173e27
+      image: quay.io/redhat-user-workloads/rhtap-qe-shared-tenant/konflux-e2e/konflux-e2e-tests:6edc95001438142e3661c8c699274052573d0f72
       args: [
         "--ginkgo.label-filter=source-build-e2e",
         "--ginkgo.no-color",
