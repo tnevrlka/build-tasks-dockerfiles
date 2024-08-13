@@ -1,22 +1,22 @@
-name: Build base images sbom script image
+name: Build sbom utility scripts image
 
 on:
   push:
     branches:
       - main
     paths:
-      - base-images-sbom-script/**
+      - sbom-utility-scripts/**
     
   pull_request:
     branches:
       - main
     paths:
-      - base-images-sbom-script/**
+      - sbom-utility-scripts/**
 
 
 env:
   REGISTRY: quay.io/redhat-appstudio
-  IMAGE_NAME: base-images-sbom-script
+  IMAGE_NAME: sbom-utility-scripts-image
   
 jobs:
   build:
@@ -31,10 +31,16 @@ jobs:
       with:
         python-version: 3.11
 
-    - name: Run tox checks
+    - name: Run tox checks for base-images-sbom-script
       run: |
         python3 -m pip install tox
-        cd ./base-images-sbom-script/app/
+        cd ./sbom-utility-scripts/scripts/base-images-sbom-script/app/
+        tox
+     
+    - name: Run tox checks for merge-cachi2-sboms-script
+      run: |
+        python3 -m pip install tox
+        cd ./sbom-utility-scripts/scripts/merge-cachi2-sboms-script/
         tox
 
     - name: Build Image
@@ -43,9 +49,9 @@ jobs:
       with:
         image: ${{ env.IMAGE_NAME }}
         tags: ${{ github.sha }}
-        context: ./base-images-sbom-script
+        context: ./sbom-utility-scripts
         containerfiles: |
-            ./base-images-sbom-script/Dockerfile
+            ./sbom-utility-scripts/Dockerfile
 
     - name: Push to Quay
       if: github.event_name == 'push'  # don't push image from PR
