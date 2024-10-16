@@ -6,6 +6,8 @@ COPY scripts/merge_syft_sboms.py /scripts
 COPY scripts/merge-cachi2-sboms-script/merge_cachi2_sboms.py /scripts
 COPY scripts/create_purl_sbom.py /scripts
 COPY scripts/base-images-sbom-script/app/base_images_sbom_script.py /scripts
-COPY scripts/base-images-sbom-script/app/requirements.txt /scripts
+COPY scripts/base-images-sbom-script/app/requirements.txt /scripts/base-images-sbom-script-requirements.txt
+COPY scripts/index-image-sbom-script/requirements.txt /scripts/index-image-sbom-script-requirements.txt
+COPY scripts/index-image-sbom-script/index_image_sbom_script.py /scripts
 
-RUN pip3 install -r requirements.txt
+RUN pip3 install -r base-images-sbom-script-requirements.txt -r index-image-sbom-script-requirements.txt
