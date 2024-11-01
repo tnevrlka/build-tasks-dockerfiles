@@ -18,7 +18,7 @@ spec:
       type: string
   steps:
     - name: e2e-test
-      image: quay.io/redhat-user-workloads/konflux-qe-team-tenant/konflux-e2e/konflux-e2e-tests:4b64d7fbf26d4a299ae4bbcd2fa828b4560b972a
+      image: quay.io/redhat-user-workloads/konflux-qe-team-tenant/konflux-e2e/konflux-e2e-tests:abc2ffea36644247bd725cbed399c215946a2f92
       command: ["/konflux-e2e/konflux-e2e.test"]
       args: [
         "--ginkgo.label-filter=source-build-e2e",
@@ -34,7 +34,7 @@ spec:
       - name: APP_SUFFIX
         value: "$(params.app_suffix)"
       - name: COMPONENT_REPO_URLS
-        value: "https://github.com/redhat-appstudio-qe/source-build-parent-image-with-digest-only,https://github.com/redhat-appstudio-qe/source-build-use-latest-parent-image,https://github.com/redhat-appstudio-qe/source-build-parent-image-from-registry-rh-io,https://github.com/redhat-appstudio-qe/source-build-base-on-konflux-image"
+        value: "https://github.com/konflux-qe-bd/source-build-parent-image-with-digest-only,https://github.com/konflux-qe-bd/source-build-use-latest-parent-image,https://github.com/konflux-qe-bd/source-build-parent-image-from-registry-rh-io,https://github.com/konflux-qe-bd/source-build-base-on-konflux-image"
       - name: QUAY_E2E_ORGANIZATION
         value: redhat-appstudio-qe
       - name: E2E_APPLICATIONS_NAMESPACE
@@ -45,8 +45,7 @@ spec:
             name: e2e-tests-github-token
             key: password
       - name: MY_GITHUB_ORG
-      # Need to be changed to redhat-appstudio-appdata
-        value: susdas-qe
+        value: konflux-qe-bd
       - name: EC_PIPELINES_REPO_URL
         value: $(params.ec_pipelines_repo_url)
       - name: EC_PIPELINES_REPO_REVISION
