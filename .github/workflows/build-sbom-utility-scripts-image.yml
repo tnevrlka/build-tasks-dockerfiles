@@ -54,7 +54,9 @@ jobs:
       uses: redhat-actions/buildah-build@v2
       with:
         image: ${{ env.IMAGE_NAME }}
-        tags: ${{ github.sha }}
+        tags: |
+          ${{ github.sha }}
+          latest
         context: ./sbom-utility-scripts
         containerfiles: |
             ./sbom-utility-scripts/Dockerfile
