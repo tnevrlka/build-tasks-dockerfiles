@@ -15,11 +15,12 @@ import sys
 import tarfile
 import tempfile
 
+from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 from subprocess import run
 from tarfile import TarInfo
-from typing import Any, TypedDict, NotRequired, Literal, Final
+from typing import Any, TypedDict, NotRequired, Literal, Final, Dict
 from urllib.parse import urlparse
 
 
@@ -237,18 +238,29 @@ def gather_prefetched_sources(
     # Guess if hermetic build is enabled
     # NOTE: this guess does depend on how cachi2 runs inside prefetch-dependencies task.
     cachi2_output_dir = f"{cachi2_dir}/output"
+    cachi2_deps_dir = os.path.join(cachi2_output_dir, "deps")
 
     if not os.path.isdir(cachi2_output_dir):
         log.info("Cannot find cachi2 output directory at %s", cachi2_output_dir)
         return gathered
 
-    def _find_prefetch_source_archives():
+    def _find_prefetch_source_archives() -> Dict[str, str]:
+        used_package_managers = (
+            os.listdir(cachi2_deps_dir) if os.path.exists(cachi2_deps_dir) else []
+        )
         guess_mime = filetype.guess_mime
-        for root, _, files in os.walk(cachi2_output_dir):
-            for filename in files:
-                mimetype = guess_mime(os.path.join(root, filename))
-                if mimetype and mimetype in ARCHIVE_MIMETYPES:
-                    yield root, filename
+        prefetched_sources = defaultdict(list)
+
+        for package_manager in used_package_managers:
+            package_manager_dir = os.path.join(cachi2_deps_dir, package_manager)
+            for root, _, files in os.walk(package_manager_dir):
+                for filename in files:
+                    filepath = os.path.join(root, filename)
+                    mimetype = guess_mime(filepath)
+
+                    if mimetype and mimetype in ARCHIVE_MIMETYPES:
+                        prefetched_sources[package_manager].append(filepath)
+        return prefetched_sources
 
     def _find_prefetch_srpm_archives():
         guess_mime = filetype.guess_mime
@@ -262,17 +274,20 @@ def gather_prefetched_sources(
 
     source_counter = itertools.count()
     prepared_sources_dir = create_dir(work_dir, "prefetched_sources")
-    relative_to = os.path.relpath
 
-    for root, filename in _find_prefetch_source_archives():
+    for package_manager, filepaths in _find_prefetch_source_archives().items():
         src_dir = f"src-{next(source_counter)}"
-        copy_dest_dir = f"{prepared_sources_dir}/{src_dir}/{relative_to(root, cachi2_output_dir)}"
-        os.makedirs(copy_dest_dir)
+        copy_dest_dir = f"{prepared_sources_dir}/{src_dir}/deps/{package_manager}"
 
-        src = f"{root}/{filename}"
-        dest = f"{copy_dest_dir}/{filename}"
-        log.debug("copy prefetched source %s to %s", src, dest)
-        shutil.copy(src, dest)
+        for src_filepath in filepaths:
+            relative_path_to_src = os.path.relpath(
+                src_filepath, f"{cachi2_deps_dir}/{package_manager}"
+            )
+            dest_dirs = os.path.join(copy_dest_dir, os.path.dirname(relative_path_to_src))
+            os.makedirs(dest_dirs, exist_ok=True)
+            dest = f"{copy_dest_dir}/{relative_path_to_src}"
+            log.debug("copy prefetched source %s to %s", src_filepath, dest)
+            shutil.copy(src_filepath, dest)
         sib_dirs.extra_src_dirs.append(f"{prepared_sources_dir}/{src_dir}")
 
     sib_dirs.rpm_dir = create_dir(work_dir, "bsi_rpms_dir")

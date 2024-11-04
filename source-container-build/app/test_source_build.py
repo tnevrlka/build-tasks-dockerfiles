@@ -484,13 +484,15 @@ class TestGatherPrefetchedSources(unittest.TestCase):
 
         # Remove the noise introduced by test on gomod package manager
         deps_with_known_file_ext = [item for item in fetched_deps if _has_known_file_ext(item)]
-
         prefetched_sources_dir = os.path.join(self.work_dir, "prefetched_sources")
+
+        def _get_number_of_used_package_managers(deps: list) -> int:
+            return len({dep.split("/")[0] for dep in deps})
 
         # Check the expected number of constructed directories work_dir/prefetched_sources/src-N
         expected_src_dirs = [
             os.path.join(prefetched_sources_dir, f"src-{count}")
-            for count in range(len(deps_with_known_file_ext))
+            for count in range(_get_number_of_used_package_managers(deps_with_known_file_ext))
         ]
         self.assertListEqual(sorted(expected_src_dirs), sorted(sib_dirs.extra_src_dirs))
 
@@ -521,6 +523,20 @@ class TestGatherPrefetchedSources(unittest.TestCase):
 
     def test_gather_pip_deps(self):
         pip_deps = ["pip/requests-1.0.0.tar.gz", "pip/Flask-1.2.3.tar.gz"]
+        self._test_gather_deps_by_package_manager(pip_deps, [".tar.gz"])
+
+    def test_gather_pip_deps_with_external_dependency(self):
+        """
+        If a pip dependency is specified directly, for example one that is fetched from
+        github instead of pypi, then cachi2 will not put the dependency directly in the pip
+        directory. Instead, it will create subdirectory with the prefix "external".
+        """
+        pip_deps = [
+            "pip/external-dockerfile-parse/dockerfile-parse-external-sha256-"
+            "36e4469abb0d96b0e3cd656284d5016e8a674cd57b8ebe5af64786fe63b8184d.tar.gz",
+            "pip/requests-1.0.0.tar.gz",
+            "pip/Flask-1.2.3.tar.gz",
+        ]
         self._test_gather_deps_by_package_manager(pip_deps, [".tar.gz"])
 
     def test_gather_npm_deps(self):
