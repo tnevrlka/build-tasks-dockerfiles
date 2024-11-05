@@ -111,7 +111,7 @@ def create_sbom(
         raise ValueError("Invalid input file detected, requires `buildah manifest inspect` json.")
 
     image_index_obj = Image.from_image_index_url_and_digest(image_index_url, image_index_digest)
-    sbom_name = f"{image_index_obj.name}-{image_index_obj.tag}"
+    sbom_name = f"{image_index_obj.repository}@{image_index_obj.digest}"
 
     packages = [create_package(image_index_obj, "SPDXRef-image-index")]
     relationships = [
@@ -139,7 +139,7 @@ def create_sbom(
     sbom = {
         "spdxVersion": "SPDX-2.3",
         "dataLicense": "CC0-1.0",
-        "documentNamespace": f"https://konflux-ci.dev/spdxdocs/{sbom_name}-{uuid4()}",
+        "documentNamespace": f"https://konflux-ci.dev/spdxdocs/{image_index_obj.name}-{image_index_obj.tag}-{uuid4()}",
         "SPDXID": "SPDXRef-DOCUMENT",
         "creationInfo": {
             "created": datetime.now(timezone.utc).isoformat(timespec="seconds"),

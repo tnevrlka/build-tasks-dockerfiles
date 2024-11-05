@@ -28,7 +28,7 @@ from index_image_sbom_script import create_sbom, main
                     "creators": ["Tool: Konflux"],
                     "licenseListVersion": "3.25",
                 },
-                "name": "single-container-app-f2566ab",
+                "name": "quay.io/mkosiarc_rhtap/single-container-app@sha256:8f99627e843e931846855c5d899901bf093f5093e613a92745696a26b5420941",
                 "packages": [
                     {
                         "SPDXID": "SPDXRef-image-index",
@@ -82,7 +82,7 @@ from index_image_sbom_script import create_sbom, main
                     "creators": ["Tool: Konflux"],
                     "licenseListVersion": "3.25",
                 },
-                "name": "ubi9-micro-container-9.4-6.1716471860",
+                "name": "quay.io/ubi9-micro-container@sha256:1c8483e0fda0e990175eb9855a5f15e0910d2038dd397d9e2b357630f0321e6d",
                 "packages": [
                     {
                         "SPDXID": "SPDXRef-image-index",
@@ -163,7 +163,11 @@ def test_create_sbom(
     assert expected_sbom == create_sbom(
         image_index_url,
         image_index_digest,
-        {"schemaVersion": 2, "mediaType": "application/vnd.oci.image.index.v1+json", "manifests": manifests},
+        {
+            "schemaVersion": 2,
+            "mediaType": "application/vnd.oci.image.index.v1+json",
+            "manifests": manifests,
+        },
     )
 
 
@@ -183,7 +187,7 @@ def test_main(
     mock_datetime.now.return_value.isoformat.return_value = "2000-00-00T00:00:00.000000"
 
     mock_args = MagicMock()
-    mock_args.image_index_url = "foo/bar:v1"
+    mock_args.image_index_url = "quay.io/foo/bar:v1"
     mock_args.image_index_digest = "sha256:456"
     mock_args.output_path = "sbom.spdx.json"
     mock_argparse.ArgumentParser.return_value.parse_args.return_value = mock_args
@@ -216,7 +220,7 @@ def test_main(
                 "creators": ["Tool: Konflux"],
                 "licenseListVersion": "3.25",
             },
-            "name": "bar-v1",
+            "name": "quay.io/foo/bar@sha256:456",
             "packages": [
                 {
                     "SPDXID": "SPDXRef-image-index",
@@ -229,13 +233,13 @@ def test_main(
                         {
                             "referenceCategory": "PACKAGE-MANAGER",
                             "referenceType": "purl",
-                            "referenceLocator": "pkg:oci/bar@sha256:456?repository_url=foo/bar",
+                            "referenceLocator": "pkg:oci/bar@sha256:456?repository_url=quay.io/foo/bar",
                         },
                     ],
                     "checksums": [{"algorithm": "SHA256", "checksumValue": "456"}],
                 },
                 {
-                    "SPDXID": "SPDXRef-image-bar-f10b3378df375bc400853a24e863f9a3194a120c4789a02ba5cc53f236712eca",
+                    "SPDXID": "SPDXRef-image-bar-9adebc2aa46e921bcd2ff839697cf543a898d9b66e1cbf6dfc0626cf2845f716",
                     "name": "bar_arm64",
                     "versionInfo": "v1",
                     "supplier": "NOASSERTION",
@@ -245,12 +249,12 @@ def test_main(
                         {
                             "referenceCategory": "PACKAGE-MANAGER",
                             "referenceType": "purl",
-                            "referenceLocator": "pkg:oci/bar@sha256:456?arch=arm64&repository_url=foo/bar",
+                            "referenceLocator": "pkg:oci/bar@sha256:456?arch=arm64&repository_url=quay.io/foo/bar",
                         },
                         {
                             "referenceCategory": "PACKAGE-MANAGER",
                             "referenceType": "purl",
-                            "referenceLocator": "pkg:oci/bar@sha256:123?repository_url=foo/bar",
+                            "referenceLocator": "pkg:oci/bar@sha256:123?repository_url=quay.io/foo/bar",
                         },
                     ],
                     "checksums": [{"algorithm": "SHA256", "checksumValue": "123"}],
@@ -263,7 +267,7 @@ def test_main(
                     "relatedSpdxElement": "SPDXRef-image-index",
                 },
                 {
-                    "spdxElementId": "SPDXRef-image-bar-f10b3378df375bc400853a24e863f9a3194a120c4789a02ba5cc53f236712eca",
+                    "spdxElementId": "SPDXRef-image-bar-9adebc2aa46e921bcd2ff839697cf543a898d9b66e1cbf6dfc0626cf2845f716",
                     "relationshipType": "VARIANT_OF",
                     "relatedSpdxElement": "SPDXRef-image-index",
                 },
