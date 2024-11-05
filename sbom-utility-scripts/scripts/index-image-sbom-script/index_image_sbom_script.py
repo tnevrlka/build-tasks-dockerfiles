@@ -10,6 +10,16 @@ from uuid import uuid4
 
 from packageurl import PackageURL
 
+INDEX_IMAGE_MANIFEST_MEDIA_TYPES = [
+    "application/vnd.oci.image.index.v1+json",
+    "application/vnd.docker.distribution.manifest.list.v2+json",
+]
+
+IMAGE_MANIFEST_MEDIA_TYPES = [
+    "application/vnd.oci.image.manifest.v1+json",
+    "application/vnd.docker.distribution.manifest.v2+json",
+]
+
 
 @dataclass
 class Image:
@@ -25,7 +35,6 @@ class Image:
         image_digest: str,
         arch: Optional[str] = None,
     ) -> "Image":
-
         repository, tag = image_url_and_tag.rsplit(":", 1)
         _, name = repository.rsplit("/", 1)
         return Image(
@@ -59,7 +68,10 @@ class Image:
             )
         ans.append(
             PackageURL(
-                type="oci", name=self.name, version=self.digest, qualifiers={"repository_url": self.repository}
+                type="oci",
+                name=self.name,
+                version=self.digest,
+                qualifiers={"repository_url": self.repository},
             ).to_string()
         )
         return ans
@@ -107,7 +119,7 @@ def create_sbom(
     image_index_digest: str,
     inspect_input: dict[str, Any],
 ) -> dict:
-    if inspect_input["mediaType"] != "application/vnd.oci.image.index.v1+json":
+    if inspect_input["mediaType"] not in INDEX_IMAGE_MANIFEST_MEDIA_TYPES:
         raise ValueError("Invalid input file detected, requires `buildah manifest inspect` json.")
 
     image_index_obj = Image.from_image_index_url_and_digest(image_index_url, image_index_digest)
@@ -123,7 +135,7 @@ def create_sbom(
     ]
 
     for manifest in inspect_input["manifests"]:
-        if manifest["mediaType"] != "application/vnd.oci.image.manifest.v1+json":
+        if manifest["mediaType"] not in IMAGE_MANIFEST_MEDIA_TYPES:
             continue
 
         arch_image = Image(
