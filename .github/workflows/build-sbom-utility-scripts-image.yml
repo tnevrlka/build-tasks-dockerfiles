@@ -7,7 +7,7 @@ on:
     paths:
       - .github/workflows/build-sbom-utility-scripts-image.yml
       - sbom-utility-scripts/**
-    
+
   pull_request:
     branches:
       - main
@@ -19,7 +19,7 @@ on:
 env:
   REGISTRY: quay.io/redhat-appstudio
   IMAGE_NAME: sbom-utility-scripts-image
-  
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -27,7 +27,7 @@ jobs:
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
-      
+
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
@@ -38,7 +38,7 @@ jobs:
         python3 -m pip install tox
         cd ./sbom-utility-scripts/scripts/base-images-sbom-script/app/
         tox
-     
+
     - name: Run tox checks for merge-cachi2-sboms-script
       run: |
         python3 -m pip install tox
@@ -49,6 +49,12 @@ jobs:
       run: |
         python3 -m pip install tox
         cd ./sbom-utility-scripts/scripts/index-image-sbom-script/
+        tox
+
+    - name: Run tox checks for index-image-sbom-script
+      run: |
+        python3 -m pip install tox
+        cd ./sbom-utility-scripts/scripts/add-image-reference-script/
         tox
 
     - name: Build Image
@@ -72,4 +78,3 @@ jobs:
         registry: ${{ env.REGISTRY }}
         username: ${{ secrets.QUAY_USERNAME }}
         password: ${{ secrets.QUAY_PASSWORD }}
-

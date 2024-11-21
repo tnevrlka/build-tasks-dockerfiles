@@ -10,4 +10,10 @@ COPY scripts/base-images-sbom-script/app/requirements.txt /scripts/base-images-s
 COPY scripts/index-image-sbom-script/requirements.txt /scripts/index-image-sbom-script-requirements.txt
 COPY scripts/index-image-sbom-script/index_image_sbom_script.py /scripts
 
-RUN pip3 install -r base-images-sbom-script-requirements.txt -r index-image-sbom-script-requirements.txt
+COPY scripts/add-image-reference-script/add_image_reference.py /scripts
+COPY scripts/add-image-reference-script/requirements.txt /scripts/add-image-reference-requirements.txt
+
+RUN pip3 install --no-cache-dir \
+    -r base-images-sbom-script-requirements.txt \
+    -r index-image-sbom-script-requirements.txt \
+    -r add-image-reference-requirements.txt
