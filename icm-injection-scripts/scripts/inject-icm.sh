@@ -14,8 +14,7 @@
 
 set -euo pipefail
 
-CONTAINER="${1}"
-IMAGE="${2}"
+IMAGE="${1}"
 SQUASH="${SQUASH:-false}"
 
 icm_filename="content-sets.json"
@@ -26,10 +25,14 @@ if [ ! -f "./sbom-cachi2.json" ]; then
   exit 0
 fi
 
-echo "Preparing construction of $location for container $CONTAINER to be committed as $IMAGE (squash: $SQUASH)"
-
+echo "Extracting annotations to copy to the modified image"
 base_image_name=$(buildah inspect --format '{{ index .ImageAnnotations "org.opencontainers.image.base.name"}}' "$IMAGE" | cut -f1 -d'@')
 base_image_digest=$(buildah inspect --format '{{ index .ImageAnnotations "org.opencontainers.image.base.digest"}}' "$IMAGE")
+
+echo "Creating container from $IMAGE"
+CONTAINER=$(buildah from --pull-never $IMAGE)
+
+echo "Preparing construction of $location for container $CONTAINER to be committed back as $IMAGE (squash: $SQUASH)"
 cat >content-sets.json <<EOF
 {
     "metadata": {
