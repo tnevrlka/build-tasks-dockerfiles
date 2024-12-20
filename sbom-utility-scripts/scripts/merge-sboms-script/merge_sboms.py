@@ -6,7 +6,7 @@ from argparse import ArgumentParser
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Iterable, Protocol, Sequence
+from typing import Any, Callable, Iterable, Literal, Protocol, Sequence
 from urllib.parse import quote_plus
 
 from packageurl import PackageURL
@@ -395,13 +395,38 @@ def merge_spdx_sboms(
     return merged_sbom
 
 
+def merge_sboms(
+    sbom_a: dict[str, Any],
+    sbom_b: dict[str, Any],
+    merge_components: MergeComponentsFunc[SBOMItem],
+) -> dict[str, Any]:
+    fmt = detect_sbom_type(sbom_a)
+    fmt2 = detect_sbom_type(sbom_b)
+    if fmt != fmt2:
+        raise ValueError(f"Mismatched SBOM formats: {fmt} X {fmt2}")
+
+    if fmt == "cyclonedx":
+        return merge_cyclonedx_sboms(sbom_a, sbom_b, merge_components)
+    else:
+        return merge_spdx_sboms(sbom_a, sbom_b, merge_components)
+
+
+def detect_sbom_type(sbom: dict[str, Any]) -> Literal["cyclonedx", "spdx"]:
+    if sbom.get("bomFormat") == "CycloneDX":
+        return "cyclonedx"
+    elif sbom.get("spdxVersion"):
+        return "spdx"
+    else:
+        raise ValueError("Unknown SBOM format")
+
+
 def merge_syft_and_cachi2_sboms(syft_sbom_paths: list[str], cachi2_sbom_path: str) -> dict[str, Any]:
     syft_sbom = merge_n_syft_sboms(syft_sbom_paths)
 
     with open(cachi2_sbom_path) as file:
         cachi2_sbom = json.load(file)
 
-    return merge_cyclonedx_sboms(syft_sbom, cachi2_sbom, merge_by_prefering_cachi2)
+    return merge_sboms(syft_sbom, cachi2_sbom, merge_by_prefering_cachi2)
 
 
 def merge_n_syft_sboms(syft_sbom_paths: list[str]) -> dict[str, Any]:
@@ -410,7 +435,7 @@ def merge_n_syft_sboms(syft_sbom_paths: list[str]) -> dict[str, Any]:
         with open(path) as f:
             sboms.append(json.load(f))
 
-    merge = functools.partial(merge_cyclonedx_sboms, merge_components=merge_by_apparent_sameness)
+    merge = functools.partial(merge_sboms, merge_components=merge_by_apparent_sameness)
     merged_sbom = functools.reduce(merge, sboms)
     return merged_sbom
 
