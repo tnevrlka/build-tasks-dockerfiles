@@ -49,6 +49,35 @@ def unwrap_from_cdx(items: list[CDXComponent]) -> list[dict[str, Any]]:
     return [c.data for c in items]
 
 
+@dataclass
+class SPDXPackage:
+    data: dict[str, Any]
+
+    def name(self) -> str:
+        return self.data["name"]
+
+    def version(self) -> str:
+        return self.data.get("versionInfo") or ""
+
+    def purl(self) -> PackageURL | None:
+        purls = self.all_purls()
+        if len(purls) > 1:
+            raise ValueError(f"multiple purls for SPDX package: {', '.join(map(str, purls))}")
+        return purls[0] if purls else None
+
+    def all_purls(self) -> list[PackageURL]:
+        purls = [ref["referenceLocator"] for ref in self.data.get("externalRefs", []) if ref["referenceType"] == "purl"]
+        return list(filter(None, map(try_parse_purl, purls)))
+
+
+def wrap_as_spdx(items: list[dict[str, Any]]) -> list[SPDXPackage]:
+    return list(map(SPDXPackage, items))
+
+
+def unwrap_from_spdx(items: list[SPDXPackage]) -> list[dict[str, Any]]:
+    return [c.data for c in items]
+
+
 def _subpath_is_version(subpath: str) -> bool:
     # pkg:golang/github.com/cachito-testing/gomod-pandemonium@v0.0.0#terminaltor -> subpath is a subpath
     # pkg:golang/github.com/cachito-testing/retrodep@v2.1.1#v2 -> subpath is a version. Thanks, Syft.
@@ -280,6 +309,87 @@ def merge_cyclonedx_sboms(
     _merge_tools_metadata(sbom_a, sbom_b)
 
     return sbom_a
+
+
+def _merge_spdx_creation_info(creation_info_a: dict[str, Any], creation_info_b: dict[str, Any]) -> dict[str, Any]:
+    def identity(creator: str) -> str:
+        return creator
+
+    creators = _merge(creation_info_a["creators"], creation_info_b["creators"], by_key=identity)
+    return creation_info_a | {"creators": creators}
+
+
+def _merge_spdx_relationships(
+    relationships_a: list[dict[str, Any]],
+    relationships_b: list[dict[str, Any]],
+    replace_spdxid: Callable[[str], str | None],
+) -> list[dict[str, Any]]:
+    """Merge two lists of SPDX relationships.
+
+    Modify relationships according to the replace_spdxid function. Given an SPDXID, it can return:
+    - the same SPDXID (relationship is unchanged)
+    - a different SPDXID (relationship is updated)
+    - None (relationship is dropped)
+    """
+    merged_relationships = []
+
+    for relationship in itertools.chain(relationships_a, relationships_b):
+        element = replace_spdxid(relationship["spdxElementId"])
+        related_element = replace_spdxid(relationship["relatedSpdxElement"])
+
+        if element and related_element:
+            merged_relationships.append(
+                relationship | {"spdxElementId": element, "relatedSpdxElement": related_element}
+            )
+
+    return _dedupe(
+        merged_relationships,
+        lambda r: (r["spdxElementId"], r["relationshipType"], r["relatedSpdxElement"]),
+    )
+
+
+def merge_spdx_sboms(
+    sbom_a: dict[str, Any],
+    sbom_b: dict[str, Any],
+    merge_components: MergeComponentsFunc[SPDXPackage],
+) -> dict[str, Any]:
+    """Merge two SPDX SBOMs."""
+    packages_a = wrap_as_spdx(sbom_a.get("packages", []))
+    packages_b = wrap_as_spdx(sbom_b.get("packages", []))
+
+    merged_packages = merge_components(packages_a, packages_b)
+    merged_packages_ids = {p.data["SPDXID"] for p in merged_packages}
+
+    def replace_spdxid(spdxid: str) -> str | None:
+        if spdxid == sbom_b["SPDXID"]:
+            # The merged document can only have one SPDXID, keep the left one
+            return sbom_a["SPDXID"]
+        if spdxid == sbom_a["SPDXID"] or spdxid in merged_packages_ids:
+            # Unchanged
+            return spdxid
+        # Drop
+        return None
+
+    merged_relationships = _merge_spdx_relationships(
+        sbom_a.get("relationships", []),
+        sbom_b.get("relationships", []),
+        replace_spdxid=replace_spdxid,
+    )
+    merged_creation_info = _merge_spdx_creation_info(
+        sbom_a["creationInfo"],
+        sbom_b["creationInfo"],
+    )
+
+    merged_sbom = sbom_a | {
+        "packages": unwrap_from_spdx(merged_packages),
+        "relationships": merged_relationships,
+        "creationInfo": merged_creation_info,
+    }
+    # we have no handling for .files
+    # we don't really care about them, so drop them altogether
+    merged_sbom.pop("files", None)
+
+    return merged_sbom
 
 
 def merge_syft_and_cachi2_sboms(syft_sbom_paths: list[str], cachi2_sbom_path: str) -> dict[str, Any]:
