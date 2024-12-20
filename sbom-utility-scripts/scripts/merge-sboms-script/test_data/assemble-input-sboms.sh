@@ -78,16 +78,16 @@ postprocess_syft_cyclonedx() {
 }
 
 cachi2 merge-sboms "$temp_workdir/cachi2-sboms"/* |
-    postprocess_cachi2_cyclonedx > "$testdata_dir/cachi2.bom.json"
+    postprocess_cachi2_cyclonedx > "$testdata_dir/cyclonedx/cachi2.bom.json"
 
-mkdir -p "$testdata_dir/syft-sboms"
+mkdir -p "$testdata_dir/cyclonedx/syft-sboms"
 for syft_sbom in ./syft-sboms/*; do
     name=$(basename "$syft_sbom")
-    postprocess_syft_cyclonedx < "$syft_sbom" > "$testdata_dir/syft-sboms/$name"
+    postprocess_syft_cyclonedx < "$syft_sbom" > "$testdata_dir/cyclonedx/syft-sboms/$name"
 done
 
 syft ./syft-sboms --select-catalogers=+sbom-cataloger -o cyclonedx-json@1.5 |
-    postprocess_syft_cyclonedx > "$testdata_dir/syft.merged-by-syft.bom.json"
+    postprocess_syft_cyclonedx > "$testdata_dir/cyclonedx/syft.merged-by-syft.bom.json"
 
-printf "syft:%s\n" "$testdata_dir/syft-sboms"/* |
-    xargs python "$testdata_dir/../merge_sboms.py" > "$testdata_dir/syft.merged-by-us.bom.json"
+printf "syft:%s\n" "$testdata_dir/cyclonedx/syft-sboms"/* |
+    xargs python "$testdata_dir/../merge_sboms.py" > "$testdata_dir/cyclonedx/syft.merged-by-us.bom.json"

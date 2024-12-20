@@ -31,7 +31,7 @@ TOOLS_METADATA = {
     },
 }
 
-# relative to data_dir
+# relative to data_dir/cyclonedx
 INDIVIDUAL_SYFT_SBOMS = [
     "syft-sboms/gomod-pandemonium.bom.json",
     "syft-sboms/npm-cachi2-smoketest.bom.json",
@@ -78,7 +78,7 @@ def test_merge_n_syft_sboms(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture,
 ) -> None:
-    monkeypatch.chdir(data_dir)
+    monkeypatch.chdir(data_dir / "cyclonedx")
 
     args = [f"syft:{sbom_path}" for sbom_path in INDIVIDUAL_SYFT_SBOMS]
     result, _ = run_main(args, monkeypatch, capsys)
@@ -124,7 +124,7 @@ def test_merge_cachi2_and_syft_sbom(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture,
 ) -> None:
-    monkeypatch.chdir(data_dir)
+    monkeypatch.chdir(data_dir / "cyclonedx")
     result, _ = run_main(args, monkeypatch, capsys)
 
     with open("merged.bom.json") as file:
