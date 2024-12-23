@@ -20,15 +20,30 @@ def try_parse_purl(s: str) -> PackageURL | None:
 
 
 class SBOMItem(Protocol):
+    def id(self) -> str: ...
     def name(self) -> str: ...
     def version(self) -> str: ...
     def purl(self) -> PackageURL | None: ...
     def unwrap(self) -> dict[str, Any]: ...
 
 
+def fallback_key(package: SBOMItem) -> str:
+    """Get the "fallback key" for a package that doesn't have a purl."""
+    name = package.name()
+    version = package.version()
+    # name starts with "." or "/" -> the package probably represents a local directory
+    # that is a useless name, don't use it as the key
+    if name and not name.startswith((".", "/")):
+        return f"{name}@{version}"
+    return package.id()
+
+
 @dataclass
 class CDXComponent:
     data: dict[str, Any]
+
+    def id(self) -> str:
+        return self.data.get("bom-ref", "")
 
     def name(self) -> str:
         return self.data["name"]
@@ -52,6 +67,9 @@ def wrap_as_cdx(items: Iterable[dict[str, Any]]) -> list[CDXComponent]:
 @dataclass
 class SPDXPackage:
     data: dict[str, Any]
+
+    def id(self) -> str:
+        return self.data["SPDXID"]
 
     def name(self) -> str:
         return self.data["name"]
@@ -129,7 +147,7 @@ def _unique_key_cachi2(component: SBOMItem) -> str:
     """
     purl = component.purl()
     if not purl:
-        raise ValueError(f"cachi2 component with no purl? name={component.name()}, version={component.version()}")
+        return fallback_key(component)
     return purl._replace(qualifiers=None, subpath=None).to_string()
 
 
@@ -146,7 +164,7 @@ def _unique_key_syft(component: SBOMItem) -> str:
     """
     purl = component.purl()
     if not purl:
-        return component.name() + "@" + component.version()
+        return fallback_key(component)
 
     name = purl.name
     version = purl.version
@@ -281,7 +299,7 @@ def merge_by_apparent_sameness[
         purl = component.purl()
         if purl:
             return purl.to_string()
-        return f"{component.name()}@{component.version()}"
+        return fallback_key(component)
 
     return [c.unwrap() for c in _merge(components_a, components_b, key)]
 
