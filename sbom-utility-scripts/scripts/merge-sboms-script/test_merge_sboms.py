@@ -70,6 +70,28 @@ def count_components(sbom: dict[str, Any]) -> Counter[str]:
     return Counter(map(key, components))
 
 
+def count_relationships(spdx_sbom: dict[str, Any]) -> Counter[str]:
+    package_spdxids = {p["SPDXID"] for p in spdx_sbom["packages"]}
+
+    def relationship_key(r: dict[str, Any]) -> str | None:
+        element = r["spdxElementId"]
+        relationship = r["relationshipType"]
+        related_element = r["relatedSpdxElement"]
+
+        if related_element not in package_spdxids:
+            # The Syft SBOM also contains relationships referencing elements of the .files array,
+            # for which we have no handling. As well as relationships referencing non-existent
+            # SPDXIDs. Exclude those from the comparison, keep only those we care about.
+            return None
+
+        if relationship == "DESCRIBES":
+            return f"{element} {relationship} {related_element}"
+        else:
+            return f"{element} {relationship} *"
+
+    return Counter(filter(None, map(relationship_key, spdx_sbom["relationships"])))
+
+
 def diff_counts(a: Counter[str], b: Counter[str]) -> dict[str, int]:
     a = a.copy()
     a.subtract(b)
@@ -141,6 +163,19 @@ def test_merge_n_syft_sboms(
 
     compared_to_syft = diff_counts(count_components(merged_by_us), count_components(merged_by_syft))
     assert compared_to_syft == expect_diff
+
+    if sbom_type == "spdx":
+        relationships_diff = diff_counts(count_relationships(merged_by_us), count_relationships(merged_by_syft))
+        assert relationships_diff == {
+            "SPDXRef-DOCUMENT DESCRIBES SPDXRef-DocumentRoot-Directory-.-syft-sboms": -1,
+            "SPDXRef-DOCUMENT DESCRIBES SPDXRef-DocumentRoot-Image-registry.access.redhat.com-ubi9-ubi-micro": 1,
+            "SPDXRef-DOCUMENT DESCRIBES SPDXRef-DocumentRoot-Directory-.": 1,
+            # In the Syft-merged SBOM, the ./syft-sboms element contains everything
+            # In our merged SBOM, the same set of packages is split between two roots
+            "SPDXRef-DocumentRoot-Directory-.-syft-sboms CONTAINS *": -139,
+            "SPDXRef-DocumentRoot-Directory-. CONTAINS *": 117,
+            "SPDXRef-DocumentRoot-Image-registry.access.redhat.com-ubi9-ubi-micro CONTAINS *": 22,
+        }
 
 
 @pytest.mark.parametrize(
@@ -246,6 +281,17 @@ def test_merge_cachi2_and_syft_sbom(
 
     taken_from_syft = diff_counts(count_components(expected_sbom), count_components(cachi2_sbom))
     assert taken_from_syft == should_take_from_syft
+
+    if sbom_type == "spdx":
+        relationships_from_syft = diff_counts(count_relationships(expected_sbom), count_relationships(cachi2_sbom))
+        assert relationships_from_syft == {
+            "SPDXRef-DOCUMENT DESCRIBES SPDXRef-DocumentRoot-Directory-.": 1,
+            "SPDXRef-DOCUMENT DESCRIBES SPDXRef-DocumentRoot-Image-registry.access.redhat.com-ubi9-ubi-micro": 1,
+            # The one pkg:golang package
+            "SPDXRef-DocumentRoot-Directory-. CONTAINS *": 1,
+            # All the pkg:rpm packages
+            "SPDXRef-DocumentRoot-Image-registry.access.redhat.com-ubi9-ubi-micro CONTAINS *": 22,
+        }
 
 
 @pytest.mark.parametrize(
