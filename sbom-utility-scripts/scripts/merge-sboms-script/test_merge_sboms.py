@@ -58,13 +58,9 @@ def count_components(sbom: dict[str, Any]) -> Counter[str]:
 
 
 def diff_counts(a: Counter[str], b: Counter[str]) -> dict[str, int]:
-    diffs: dict[str, int] = {}
-    for key, count_a in a.items():
-        count_b = b.get(key, 0)
-        diff = count_a - count_b
-        if diff != 0:
-            diffs[key] = diff
-    return diffs
+    a = a.copy()
+    a.subtract(b)
+    return {key: count for key, count in a.items() if count != 0}
 
 
 def run_main(args: list[str], monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> tuple[str, str]:
