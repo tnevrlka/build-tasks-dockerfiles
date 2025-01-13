@@ -31,6 +31,7 @@ base_image_digest=$(buildah inspect --format '{{ index .ImageAnnotations "org.op
 
 echo "Creating container from $IMAGE"
 CONTAINER=$(buildah from --pull-never $IMAGE)
+trap 'buildah rm "$CONTAINER"' EXIT
 
 echo "Preparing construction of $location for container $CONTAINER to be committed back as $IMAGE (squash: $SQUASH)"
 cat >content-sets.json <<EOF
