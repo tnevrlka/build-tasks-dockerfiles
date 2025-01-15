@@ -4,20 +4,21 @@ metadata:
   annotations:
     build.appstudio.openshift.io/repo: https://github.com/konflux-ci/build-tasks-dockerfiles?rev={{revision}}
     build.appstudio.redhat.com/commit_sha: '{{revision}}'
+    build.appstudio.redhat.com/pull_request_number: '{{pull_request_number}}'
     build.appstudio.redhat.com/target_branch: '{{target_branch}}'
     pipelinesascode.tekton.dev/max-keep-runs: "3"
-    pipelinesascode.tekton.dev/on-cel-expression: event == "push" && target_branch == "main" && 
+    pipelinesascode.tekton.dev/on-cel-expression: event == "pull_request" && target_branch == "main" && 
       (
-      "source-container-build/***".pathChanged() ||
-      ".tekton/source-container-build-push.yaml".pathChanged() ||
+      "sbom-utility-scripts/***".pathChanged() ||
+      ".tekton/sbom-utility-scripts-pull-request.yaml".pathChanged() ||
       ".tekton/build-pipeline.yaml".pathChanged()
       )
-  creationTimestamp:
+  creationTimestamp: null
   labels:
     appstudio.openshift.io/application: build-tasks-dockerfiles
-    appstudio.openshift.io/component: source-container-build
+    appstudio.openshift.io/component: sbom-utility-scripts
     pipelines.appstudio.openshift.io/type: build
-  name: source-container-build-on-push
+  name: sbom-utility-scripts-on-pull-request
   namespace: rhtap-build-tenant
 spec:
   params:
@@ -26,14 +27,16 @@ spec:
   - name: revision
     value: '{{revision}}'
   - name: output-image
-    value: quay.io/redhat-user-workloads/rhtap-build-tenant/build-tasks-dockerfiles/source-container-build:{{revision}}
+    value: quay.io/redhat-user-workloads/rhtap-build-tenant/sbom-utility-scripts:on-pr-{{revision}}
+  - name: image-expires-after
+    value: 5d
   - name: build-platforms
     value:
     - linux/x86_64
   - name: dockerfile
     value: Dockerfile
   - name: path-context
-    value: source-container-build
+    value: sbom-utility-scripts
   - name: build-source-image
     value: "true"
   pipelineRef:
